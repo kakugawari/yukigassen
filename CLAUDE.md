@@ -63,6 +63,7 @@ app.js                    操作・描画 (three.js)・音
 three.min.js              three.js r160 (MIT)。手を入れない
 bundle.js                 テストプレイ用に 1 枚の HTML へまとめる
 ASSETS.md                 画像に置き換える物の一覧 (大きさ・形式・背景の抜き方)
+PROMPT_PLAYERS.md         選手の絵を生成するときの指示 (英語の指示文つき)
 core.test.js              ロジックのテスト (node --test)
 browser-test.js           ブラウザで動かすテスト
 serve.js                  開発用サーバー

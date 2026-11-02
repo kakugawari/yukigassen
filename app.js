@@ -7,7 +7,8 @@
   const C = window.Core;
   const R = C.R;
   const T = window.THREE;
-  const VERSION = 'v1';
+  const VERSION = 'v3';
+  const AUTO_CROUCH = 0.2;   // 止まってからしゃがむまで (秒)
 
   const $ = (id) => document.getElementById(id);
   const els = {
@@ -16,7 +17,7 @@
     setNo: $('setNo'), time: $('time'), stockBlue: $('stockBlue'), stockRed: $('stockRed'),
     ptsBlue: $('ptsBlue'), ptsRed: $('ptsRed'), inEnemy: $('inEnemy'), warn: $('warn'),
     stickZone: $('stickZone'), stick: $('stick'), knob: $('knob'), moveHint: $('moveHint'),
-    btnCrouch: $('btnCrouch'), makeRing: $('makeRing'), throwPad: $('throwPad'), myBalls: $('myBalls'),
+    makeRing: $('makeRing'), throwPad: $('throwPad'), myBalls: $('myBalls'), pops: $('pops'),
     banner: $('banner'),
     vTitle: $('vTitle'), vPause: $('vPause'), vResult: $('vResult'),
     btnStart: $('btnStart'), btnPause: $('btnPause'), btnResume: $('btnResume'), btnQuit: $('btnQuit'),
@@ -43,7 +44,9 @@
     input: { mx: 0, mz: 0, crouch: false, throwAt: null },
     aim: null,           // { id, sx, sy, dx, dy, tx, tz }
     stickTouch: null,    // { id, ox, oy }
-    crouchTouch: null,
+    idleT: 0,            // 移動の入力が無い時間 (AUTO_CROUCH 秒でしゃがむ)
+    slowT: 0,            // ヒットストップの残り
+    combo: { n: 0, t: 0 },
     shake: 0,
     frames: 0,
     hud: {},
@@ -311,7 +314,13 @@
   aimRing.visible = false;
   scene.add(aimRing);
 
-  const lockRing = new T.Mesh(new T.RingGeometry(0.45, 0.6, 28), new T.MeshBasicMaterial({ color: 0xff3b30, depthTest: false, transparent: true, opacity: 0.9 }));
+  const lockRing = new T.Mesh(new T.RingGeometry(0.46, 0.7, 28), new T.MeshBasicMaterial({ color: 0xff3b30, depthTest: false, transparent: true, opacity: 0.95 }));
+  // 狙っている相手の頭の上の印 (壁の陰でも見えるように、奥行きを無視して描く)
+  const lockMark = new T.Mesh(new T.ConeGeometry(0.2, 0.42, 4), new T.MeshBasicMaterial({ color: 0xff3b30, depthTest: false, transparent: true }));
+  lockMark.rotation.x = Math.PI;
+  lockMark.renderOrder = 7;
+  lockMark.visible = false;
+  scene.add(lockMark);
   lockRing.rotation.x = -Math.PI / 2;
   lockRing.renderOrder = 6;
   lockRing.visible = false;
@@ -328,12 +337,59 @@
     return { x: p.x + dx * k, z: p.z + dy * k };
   }
 
+  /**
+   * いまの狙い。
+   * - ふだん・タップ: 前方のいちばん狙いやすい相手を自動で選ぶ
+   * - はじく (スライド): その向きにいる相手を選ぶ。40° 以内にだれもいなければ、指の量で地面を狙う
+   * 相手を選んだときは、動きを先読みし、壁に隠れていれば奥へ落として頭越しに当てる (Core.assistAim)
+   * - ビクトリースロー: 補助なし。指の量で地面を狙う
+   */
+  function currentAim() {
+    const m = app.match, p = me();
+    if (!m || !p || !p.alive) return null;
+    const a = app.aim;
+    const dragging = a && a.len >= 14;
+    if (m.phase === 'vt') {
+      if (!dragging) return null;
+      const t = aimTarget(a.dx, a.dy);
+      return { x: t.x, z: t.z, target: null, clear: C.predictVT(p.team, p.x, p.z, t.x, t.z), manual: true };
+    }
+    if (m.phase !== 'play') return null;
+    const dir = dragging ? { x: a.dx, z: a.dy } : null;
+    const q = C.pickTarget(m, p, dir);
+    if (q) return C.assistAim(m, p, null, q);
+    if (!dragging) return null;
+    const t = aimTarget(a.dx, a.dy);
+    return { x: t.x, z: t.z, target: null, clear: !!C.predictHit(m.players, p.team, p.x, p.z, t.x, t.z), manual: true };
+  }
+
   function updateAim() {
     const p = me();
-    if (!app.aim || !p || !p.alive || app.aim.len < 14) { aimLine.visible = false; aimRing.visible = false; lockRing.visible = false; return; }
-    const t = aimTarget(app.aim.dx, app.aim.dy);
-    app.aim.tx = t.x; app.aim.tz = t.z;
-    const tr = C.trajectory(p.x, p.z, t.x, t.z, 0.025);
+    const aim = currentAim();
+    app.lock = aim;
+    const ready = !!(aim && aim.clear && p && p.balls > 0);
+    if (app.hud.ready !== ready) { app.hud.ready = ready; els.throwPad.classList.toggle('ready', ready); }
+    // 狙っている相手の足もとに輪 (当たるコースなら赤、壁に隠れていれば灰色)
+    if (aim && aim.target != null) {
+      const q = app.match.players[aim.target];
+      lockRing.visible = true;
+      lockRing.position.set(q.x, 0.03, q.z);
+      const col = aim.clear ? 0xff3b30 : 0x8d99ab;
+      lockRing.material.color.setHex(col);
+      const s = 1 + Math.sin(performance.now() / 120) * 0.08;
+      lockRing.scale.set(s, s, 1);
+      lockMark.visible = true;
+      lockMark.material.color.setHex(col);
+      lockMark.position.set(q.x, C.playerHeight(q) + 0.7 + Math.sin(performance.now() / 160) * 0.08, q.z);
+      lockMark.rotation.y = performance.now() / 400;
+    } else if (aim && app.match.phase === 'vt' && aim.clear) {
+      const f = C.flagPos(1 - p.team);
+      lockRing.visible = true; lockRing.position.set(f.x, 0.03, f.z); lockRing.material.color.setHex(0xff3b30);
+    } else lockRing.visible = false;
+    if (!(aim && aim.target != null)) lockMark.visible = false;
+    // 押している間だけ、球の通り道を出す
+    if (!app.aim || !aim) { aimLine.visible = false; aimRing.visible = false; return; }
+    const tr = C.trajectory(p.x, p.z, aim.x, aim.z, 0.025);
     const arr = aimGeo.attributes.position.array;
     const n = Math.min(tr.points.length, 200);
     for (let i = 0; i < n; i++) { arr[i * 3] = tr.points[i].x; arr[i * 3 + 1] = tr.points[i].y; arr[i * 3 + 2] = tr.points[i].z; }
@@ -344,22 +400,9 @@
     aimLine.visible = true;
     aimRing.visible = true;
     aimRing.position.set(tr.end.x, Math.max(0.03, tr.end.y), tr.end.z);
-    if (app.match.phase === 'vt') {
-      // ビクトリースロー: フラッグに当たるコースなら赤
-      const hit = C.predictVT(p.team, p.x, p.z, t.x, t.z);
-      const col = hit ? 0xff3b30 : tr.hit === 'shelter' ? 0x9aa6b8 : 0xffb020;
-      aimRing.material.color.setHex(col); aimLine.material.color.setHex(col);
-      const f = C.flagPos(1 - p.team);
-      lockRing.visible = hit; lockRing.position.set(f.x, 0.03, f.z);
-      return;
-    }
-    // いまの位置のままなら当たる相手がいれば赤く (動かれると外れる)
-    const victim = C.predictHit(app.match.players, p.team, p.x, p.z, t.x, t.z);
-    const col = victim ? 0xff3b30 : tr.hit === 'shelter' ? 0x9aa6b8 : 0xffb020;
+    const col = aim.clear ? 0xff3b30 : tr.hit === 'shelter' ? 0x9aa6b8 : 0xffb020;
     aimRing.material.color.setHex(col);
     aimLine.material.color.setHex(col);
-    app.aimVictim = victim ? victim.id : null;
-    if (victim) { lockRing.visible = true; lockRing.position.set(victim.x, 0.03, victim.z); } else lockRing.visible = false;
   }
 
   // ------------------------------------------------------------ 指の操作
@@ -401,24 +444,7 @@
     els.stickZone.addEventListener('pointerup', endStick);
     els.stickZone.addEventListener('pointercancel', endStick);
 
-    // しゃがむ (押している間)
-    els.btnCrouch.addEventListener('pointerdown', (e) => {
-      e.preventDefault();
-      capture(els.btnCrouch, e.pointerId);
-      app.crouchTouch = e.pointerId;
-      app.input.crouch = true;
-      els.btnCrouch.classList.add('on');
-    });
-    const endCrouch = (e) => {
-      if (app.crouchTouch !== e.pointerId) return;
-      app.crouchTouch = null;
-      app.input.crouch = false;
-      els.btnCrouch.classList.remove('on');
-    };
-    els.btnCrouch.addEventListener('pointerup', endCrouch);
-    els.btnCrouch.addEventListener('pointercancel', endCrouch);
-
-    // 投げる: 押して引くと狙い、離すと投げる
+    // 投げる: タップで自動の狙い、はじくとその向きの相手、離すと投げる
     els.throwPad.addEventListener('pointerdown', (e) => {
       if (app.aim) return;
       e.preventDefault();
@@ -442,12 +468,12 @@
       if (cancel) return;
       const p = me();
       if (!p || !p.alive) return;
-      if (a.len >= 14) {
-        const t = aimTarget(a.dx, a.dy);
-        app.input.throwAt = t;
-      } else {
-        app.input.throwAt = autoTarget(p);
-      }
+      // 離した瞬間の指で狙いを決める
+      app.aim = a;
+      const aim = currentAim();
+      app.aim = null;
+      if (aim) app.input.throwAt = { x: aim.x, z: aim.z };
+      else if (app.match.phase === 'play') app.input.throwAt = { x: p.x, z: p.z - C.side(p.team) * 12 };
     };
     els.throwPad.addEventListener('pointerup', (e) => release(e, false));
     els.throwPad.addEventListener('pointercancel', (e) => release(e, true));
@@ -458,12 +484,11 @@
       if (app.stickTouch) return;
       app.input.mx = (keys.d || keys.arrowright ? 1 : 0) - (keys.a || keys.arrowleft ? 1 : 0);
       app.input.mz = (keys.s || keys.arrowdown ? 1 : 0) - (keys.w || keys.arrowup ? 1 : 0);
-      if (app.crouchTouch == null) app.input.crouch = !!keys.shift;
     };
     window.addEventListener('keydown', (e) => {
       const k = e.key.toLowerCase();
       keys[k] = true; applyKeys();
-      if (k === ' ') { const p = me(); if (p && p.alive) app.input.throwAt = autoTarget(p); e.preventDefault(); }
+      if (k === ' ') { const aim = currentAim(); if (aim) app.input.throwAt = { x: aim.x, z: aim.z }; e.preventDefault(); }
     });
     window.addEventListener('keyup', (e) => { keys[e.key.toLowerCase()] = false; applyKeys(); });
   }
@@ -472,22 +497,6 @@
   function capture(el, id) { try { el.setPointerCapture(id); } catch (err) { /* 捕まえられなくても動く */ } }
 
   function setKnob(dx, dy) { els.knob.style.transform = `translate(${dx}px, ${dy}px)`; }
-
-  /** タップで投げたとき: 前方のいちばん近い相手の足もとへ (先読みはしない) */
-  function autoTarget(p) {
-    const s = C.side(p.team);
-    let best = null, bd = Infinity;
-    for (const q of app.match.players) {
-      if (!q.alive || q.team === p.team) continue;
-      const d = Math.hypot(q.x - p.x, q.z - p.z);
-      if (d > R.RANGE) continue;
-      const ahead = (p.z - q.z) * s;
-      const score = d - (ahead > 0 ? 3 : 0);
-      if (score < bd) { bd = score; best = q; }
-    }
-    if (best) return { x: best.x, z: best.z };
-    return { x: p.x, z: p.z - s * 12 };
-  }
 
   // ------------------------------------------------------------ 音 (Web Audio で作る)
   const sound = (() => {
@@ -532,7 +541,14 @@
       unlock,
       throw() { burst(0.16, 1400, 0.8, 0.25, 'bandpass'); },
       splat(near) { burst(0.12, 500, 0.7, near ? 0.5 : 0.22, 'lowpass'); },
-      hit() { burst(0.2, 700, 0.6, 0.6, 'lowpass'); tone(520, 0.18, 0.18, 'triangle', 260); },
+      hit(combo) {
+        burst(0.2, 700, 0.6, 0.6, 'lowpass');
+        if (combo) {
+          // 自分が当てた: 連続するほど高く
+          const f = 660 * Math.pow(1.19, Math.min(combo, 6) - 1);
+          tone(f, 0.12, 0.2, 'square'); setTimeout(() => tone(f * 1.5, 0.18, 0.18, 'square'), 70);
+        } else tone(520, 0.18, 0.18, 'triangle', 260);
+      },
       out() { tone(330, 0.35, 0.2, 'sawtooth', 120); },
       made() { tone(880, 0.06, 0.08, 'sine'); },
       whistle(long) { tone(2300, long ? 0.7 : 0.35, 0.12, 'sine'); tone(2340, long ? 0.7 : 0.35, 0.08, 'sine'); },
@@ -559,6 +575,25 @@
     els.vPause.hidden = true;
     snapCamera();
     handleEvents();
+  }
+
+  /** 3D の位置に、ぽんと浮かぶ文字 */
+  function popText(text, x, y, z, level) {
+    const v = new T.Vector3(x, y, z).project(camera);
+    const r = els.canvas.getBoundingClientRect();
+    const el = document.createElement('div');
+    el.className = 'pop' + (level >= 2 ? ' big' : '');
+    el.textContent = text;
+    el.style.left = (r.left + (v.x + 1) / 2 * r.width) + 'px';
+    el.style.top = (r.top + (1 - v.y) / 2 * r.height) + 'px';
+    els.pops.appendChild(el);
+    const a = el.animate([
+      { transform: 'translate(-50%, -50%) scale(.4)', opacity: 0 },
+      { transform: 'translate(-50%, -80%) scale(1.25)', opacity: 1, offset: 0.18 },
+      { transform: 'translate(-50%, -90%) scale(1)', opacity: 1, offset: 0.6 },
+      { transform: 'translate(-50%, -150%) scale(.9)', opacity: 0 }
+    ], { duration: 1000, easing: 'ease-out' });
+    a.onfinish = () => el.remove();
   }
 
   function showBanner(html, cls, sec) {
@@ -599,12 +634,32 @@
           break;
         }
         case 'hit': {
-          puff(e.x, e.y, e.z, 16, 1.3);
-          sound.hit();
           const v = views.players[e.player];
-          if (v) v.outT = 0;
-          if (e.player === mine) { app.shake = 0.5; sound.out(); showBanner('当たった!<small>仲間に交代</small>', 'red', 1.2); }
-          else if (m.players[e.by] && m.players[e.by].id === mine) showBanner('命中!', 'blue', 0.8);
+          if (v) {
+            v.outT = 0;
+            // 玉の向きへ吹き飛ぶ
+            const l = Math.hypot(e.vx || 0, e.vz || 0) || 1;
+            v.kb = { x: (e.vx || 0) / l, z: (e.vz || 0) / l };
+          }
+          if (e.player === mine) {
+            puff(e.x, e.y, e.z, 16, 1.3);
+            app.shake = 0.5; sound.hit(); sound.out();
+            app.combo.n = 0;
+            showBanner('当たった!<small>仲間に交代</small>', 'red', 1.2);
+          } else if (e.by === mine) {
+            // 自分の一撃: ヒットストップ・大きな粉雪・OUT! の文字・連続ヒット
+            puff(e.x, e.y, e.z, 30, 1.8);
+            app.slowT = 0.16; app.shake = 0.28;
+            const now = performance.now() / 1000;
+            app.combo.n = now - app.combo.t < 6 ? app.combo.n + 1 : 1;
+            app.combo.t = now;
+            sound.hit(app.combo.n);
+            const word = ['OUT!', 'ダブル!', 'トリプル!'][app.combo.n - 1] || `${app.combo.n}連続!`;
+            popText(word, e.x, 2.2, e.z, app.combo.n);
+          } else {
+            puff(e.x, e.y, e.z, 16, 1.3);
+            sound.hit();
+          }
           break;
         }
         case 'made': if (e.player === m.human) sound.made(); break;
@@ -706,7 +761,8 @@
           if (v.outT < 0) v.outT = 0;
           v.outT += dt;
           v.pose.rotation.x = Math.min(1, v.outT * 4) * -1.35;
-          v.root.position.y = 0;
+          const kb = v.kb ? (1 - Math.exp(-v.outT * 7)) * 1.3 : 0;
+          v.root.position.set(p.x + (v.kb ? v.kb.x * kb : 0), Math.max(0, Math.sin(Math.min(1, v.outT * 3) * Math.PI) * 0.35), p.z + (v.kb ? v.kb.z * kb : 0));
           const k = Math.max(0, 1 - Math.max(0, v.outT - 0.8) / 0.6);
           v.root.visible = k > 0;
           v.shadow.visible = k > 0;
@@ -750,6 +806,8 @@
       for (const b of m.balls) {
         const v = ballView(b);
         v.mesh.position.set(b.x, b.y, b.z);
+        // 自分の玉には、うしろに粉雪の尾
+        if (m.human != null && b.owner === m.human && (app.frames & 1)) puff(b.x, b.y, b.z, 1, 0.12);
         v.shadow.position.set(b.x, 0.016, b.z);
         const s = 1 / (1 + b.y * 0.25);
         v.shadow.scale.set(0.32 * s, 0.32 * s, 1);
@@ -883,7 +941,14 @@
     app.frames++;
 
     if (app.match && app.running && !app.paused) {
-      app.acc += dt;
+      // 止まると自動でしゃがむ (しゃがむと雪玉を丸める)。動けば立つ
+      const moving = Math.hypot(app.input.mx, app.input.mz) > 0.05;
+      app.idleT = moving ? 0 : app.idleT + dt;
+      app.input.crouch = app.idleT >= AUTO_CROUCH;
+      // 当てた瞬間は一瞬だけゆっくりにする (ヒットストップ)
+      let simDt = dt;
+      if (app.slowT > 0) { app.slowT -= dt; simDt = dt * 0.2; }
+      app.acc += simDt;
       const h = 1 / 60;
       let n = 0;
       while (app.acc >= h && n < 4) {
@@ -922,7 +987,7 @@
     if (on) {
       app.aim = null; app.stickTouch = null;
       app.input.mx = app.input.mz = 0; app.input.crouch = false;
-      els.throwPad.classList.remove('on'); els.btnCrouch.classList.remove('on'); els.stick.classList.remove('on');
+      els.throwPad.classList.remove('on'); els.stick.classList.remove('on');
       setKnob(0, 0);
     }
   }
@@ -990,6 +1055,7 @@
         return { x: r.left + (v.x + 1) / 2 * r.width, y: r.top + (1 - v.y) / 2 * r.height };
       },
       aimTarget,
+      currentAim,
       frames: () => app.frames,
       info: () => ({ calls: renderer.info.render.calls, tris: renderer.info.render.triangles, pr: renderer.getPixelRatio() })
     };

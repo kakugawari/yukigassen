@@ -282,7 +282,7 @@
         const p = hit.player;
         p.alive = false;
         p.outAt = m.time;
-        m.events.push({ type: 'hit', player: p.id, by: b.owner, x: b.x, y: b.y, z: b.z });
+        m.events.push({ type: 'hit', player: p.id, by: b.owner, x: b.x, y: b.y, z: b.z, vx: b.vx, vz: b.vz });
       } else if (hit.kind !== 'out') {
         m.events.push({ type: 'splat', on: hit.kind, x: b.x, y: Math.max(b.y, 0.02), z: b.z });
       }
@@ -528,6 +528,41 @@
     // 走っている的ほど外れやすい (先読みしても、向きを変えられるとずれる)
     const err = lerp(1.7, 0.7, s) * (0.6 + best.d / R.RANGE) + best.mv * lerp(0.45, 0.25, s);
     return { x: best.ax + gauss(m.rng) * err, z: best.az + gauss(m.rng) * err };
+  }
+
+  /**
+   * 人が投げるときの狙いの補助。
+   * dir (向き {x,z}) を渡すと、その向きにいちばん近い相手を選ぶ。null なら前方のいちばん狙いやすい相手。
+   * 選んだ相手の動きを先読みし、足もとが壁に隠れていれば奥へ落として頭越しに当てる。
+   * @returns {null | {x, z, target, clear}}  clear: 壁に止められずに届く見込み
+   */
+  function pickTarget(m, p, dir) {
+    let best = null, bestS = Infinity;
+    const fx = dir ? dir.x : 0, fz = dir ? dir.z : -side(p.team);
+    const fl = Math.hypot(fx, fz) || 1;
+    for (const q of m.players) {
+      if (!q.alive || q.team === p.team) continue;
+      const dx = q.x - p.x, dz = q.z - p.z;
+      const d = Math.hypot(dx, dz);
+      if (d > R.RANGE + 1 || d < 0.5) continue;
+      const cos = (dx * fx + dz * fz) / (d * fl);
+      if (dir && cos < Math.cos(40 * Math.PI / 180)) continue;   // はじいた向きから 40° 以内
+      const ang = Math.acos(Math.max(-1, Math.min(1, cos)));
+      const hidden = q.crouch && q.standT <= 0;
+      const score = dir ? ang * 8 + d * 0.15 : d + (cos < 0 ? 12 : 0) + (hidden ? 4 : 0);
+      if (score < bestS) { bestS = score; best = q; }
+    }
+    return best;
+  }
+
+  function assistAim(m, p, dir, target) {
+    const q = target || pickTarget(m, p, dir);
+    if (!q) return null;
+    const t = launch(p.x, p.z, q.x, q.z).t;
+    const ax = q.x + q.vx * t, az = q.z + q.vz * t;      // 今の動きのまま進んだ所
+    const aim = findAim(m.players, p.team, p.x, p.z, q, ax, az);
+    if (aim) return { x: aim.x, z: aim.z, target: q.id, clear: true };
+    return { x: ax, z: az, target: q.id, clear: false };
   }
 
   /** 飛んでくる球が自分に当たりそうか (最初に当たる物まで先読み) */
@@ -932,6 +967,6 @@
     createMatch, startSet, step, drainEvents,
     launch, trajectory, predictHit, findAim, throwBall, ballCollide, playerHeight,
     movePlayer, pushOutOfShelters, limits, aliveCount, steer, blockingShelter,
-    aiInput, threatOf, inEnemyCourt, enemyCourtCount, setPoints, startVT, hitsFlag, predictVT
+    aiInput, threatOf, inEnemyCourt, enemyCourtCount, setPoints, startVT, hitsFlag, predictVT, pickTarget, assistAim
   };
 });

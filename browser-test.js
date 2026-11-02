@@ -131,7 +131,7 @@ async function run() {
     ok(true, 'カウントダウンのあとプレーが始まる');
 
     // 実機の安全域 (上 59・下 34) を足しても、操作と表示が画面に収まる
-    const rects = await phone.evaluate(() => ['.score', '#btnPause', '#btnCrouch', '#throwPad', '#stick'].map((sel) => {
+    const rects = await phone.evaluate(() => ['.score', '#btnPause', '#throwPad', '#stick'].map((sel) => {
       const r = document.querySelector(sel).getBoundingClientRect();
       return { sel, top: r.top, bottom: r.bottom, left: r.left, right: r.right };
     }));
@@ -168,50 +168,103 @@ async function run() {
     ok(held < -0.9, `指がゾーンの外へ出ても進み続ける (mz ${held.toFixed(2)})`);
     ok(after === 0, '指を離すと止まる');
 
-    // ---- 狙って投げる
-    const pad = await center('#throwPad');
-    const before = await phone.evaluate(() => ({ balls: window.__app.me().balls, id: window.__app.me().id, z: window.__app.me().z, x: window.__app.me().x }));
-    await phone.mouse.move(pad.x, pad.y);
-    await phone.mouse.down();
-    await phone.mouse.move(pad.x - 30, pad.y - 90, { steps: 5 });
-    await phone.waitForTimeout(80);
-    const aiming = await phone.evaluate(() => {
-      const a = window.__app.app.aim;
-      return { on: !!a, tx: a && a.tx, tz: a && a.tz };
+    // ---- 狙って投げる (はじいた向きの相手を自動で狙う)
+    // あかを 2 人だけ、自分の左前と右前に止めておく。仲間は投げない
+    const setup = await phone.evaluate(() => {
+      const m = window.__app.match(), me = window.__app.me();
+      me.x = 0; me.z = 6; me.balls = 5;
+      m.skill[1] = 0;
+      m.players.filter((p) => p.team === 0 && p !== me).forEach((p) => { p.balls = 0; });
+      m.stock[0] = 0;     // 仲間が丸めて当ててしまわないように
+      const reds = m.players.filter((p) => p.team === 1);
+      reds.forEach((p, i) => { p.alive = i < 2; p.ai.think = 999; p.ai.goal = null; p.balls = 0; });
+      reds[0].x = -3.5; reds[0].z = -3;
+      reds[1].x = 3.5; reds[1].z = -3;
+      return { me: me.id, left: reds[0].id, right: reds[1].id };
     });
-    ok(aiming.on && aiming.tz < before.z - 5 && aiming.tx < before.x,
-      `上へスライドすると前方に狙いが出る (自分 ${before.x.toFixed(1)},${before.z.toFixed(1)} → 狙い ${aiming.tx && aiming.tx.toFixed(1)},${aiming.tz && aiming.tz.toFixed(1)})`);
-    await phone.mouse.up();
-    await phone.waitForTimeout(100);
-    const thrown = await phone.evaluate((id) => ({
-      balls: window.__app.match().players[id].balls,
-      mine: window.__app.match().balls.filter((b) => b.owner === id).map((b) => ({ vx: b.vx, vz: b.vz }))
-    }), before.id);
-    ok(thrown.balls === before.balls - 1, `離すと投げる (雪玉 ${before.balls} → ${thrown.balls})`);
-    ok(thrown.mine.length === 1 && thrown.mine[0].vz < 0 && thrown.mine[0].vx < 0, '狙った向き (左前) へ飛んでいく');
-
-    // タップは近くの相手へ
+    await phone.waitForTimeout(300);
+    const pad = await center('#throwPad');
+    const lockIdle = await phone.evaluate(() => window.__app.app.lock && window.__app.app.lock.target);
+    ok(lockIdle === setup.left || lockIdle === setup.right, `触っていなくても、狙う相手に輪が出ている (相手 ${lockIdle})`);
+    // 右前の相手の方へはじく
+    const flick = async (dx, dy) => {
+      await phone.mouse.move(pad.x, pad.y);
+      await phone.mouse.down();
+      await phone.mouse.move(pad.x + dx, pad.y + dy, { steps: 4 });
+      await phone.waitForTimeout(80);
+      const during = await phone.evaluate(() => ({ lock: window.__app.app.lock, line: true }));
+      await phone.mouse.up();
+      await phone.waitForTimeout(60);
+      // 向きだけ確かめたいので、当たってセットが終わらないよう玉は片づける
+      const flew = await phone.evaluate(() => {
+        const m = window.__app.match();
+        const out = m.balls.filter((b) => b.owner === m.human).map((b) => ({ vx: b.vx, vz: b.vz }));
+        m.balls = [];
+        return out;
+      });
+      return Object.assign({}, during.lock, { flew });
+    };
+    const ballsBefore = await phone.evaluate(() => window.__app.me().balls);
+    const lockR = await flick(40, -70);
+    const flewR = lockR.flew;
+    ok(lockR && lockR.target === setup.right && lockR.clear, `右前へはじくと右の相手を狙い、当たるコースになる`);
+    ok(flewR.length === 1 && flewR[0].vx > 0 && flewR[0].vz < 0, `右前へ飛んでいく`);
     await phone.waitForTimeout(600);
-    const b2 = await phone.evaluate(() => ({ b: window.__app.me().balls, cd: window.__app.me().cd, id: window.__app.me().id }));
-    await phone.mouse.click(pad.x, pad.y);
-    await phone.waitForTimeout(100);
-    const b3 = await phone.evaluate(() => ({ b: window.__app.me().balls, id: window.__app.me().id, alive: window.__app.me().alive }));
-    ok(b3.b === b2.b - 1, `タップでも投げられる (${JSON.stringify(b2)} → ${JSON.stringify(b3)})`);
+    const lockL = await flick(-40, -70);
+    ok(lockL && lockL.target === setup.left, '左前へはじくと左の相手を狙う');
+    const ballsAfter = await phone.evaluate(() => window.__app.me().balls);
+    ok(ballsAfter === ballsBefore - 2, `はじくたびに 1 個投げる (${ballsBefore} → ${ballsAfter})`);
+    // だれもいない向き (真後ろ) へはじくと、指の量で地面を狙う
+    await phone.waitForTimeout(600);
+    const lockB = await flick(0, 80);
+    ok(lockB && lockB.manual && lockB.target == null && lockB.z > 6, `だれもいない向きへはじくと、その向きの地面を狙う (z ${lockB && lockB.z.toFixed(1)})`);
 
-    // ---- しゃがむ・丸める
-    const cr = await center('#btnCrouch');
-    await phone.mouse.move(cr.x, cr.y);
-    await phone.mouse.down();
-    await phone.waitForTimeout(150);
+    // ---- 当てたときの手応え: 目の前で止まっている相手にタップで当てる
+    // (上ではじいた玉が当たってセットが終わっていることがあるので、プレー中に戻るのを待つ)
+    await phone.waitForFunction(() => window.__app.match().phase === 'play', null, { timeout: 15000 });
+    const victim = await phone.evaluate(() => {
+      const m = window.__app.match(), me = window.__app.me();
+      me.x = 0; me.z = 6; me.balls = 3; me.cd = 0;
+      m.skill[1] = 0;
+      m.players.filter((p) => p.team === 0 && p !== me).forEach((p) => { p.balls = 0; });
+      m.stock = [0, 0];
+      const reds = m.players.filter((p) => p.team === 1);
+      // 3 人残す (このあとの確かめで 1 人退場させても、セットが終わらないように)
+      reds.forEach((p, i) => { p.alive = i < 3; p.ai.think = 999; p.ai.goal = null; p.balls = 0; });
+      reds[0].x = 0; reds[0].z = 2;          // 4m 先。よける間が無い
+      reds[1].x = 4.5; reds[1].z = -16;
+      reds[2].x = -4.5; reds[2].z = -16;
+      return reds[0].id;
+    });
+    await phone.waitForTimeout(100);
+    await phone.mouse.click(pad.x, pad.y);
+    await phone.waitForFunction((id) => !window.__app.match().players[id].alive, victim, { timeout: 5000 }).catch(() => {});
+    await phone.waitForTimeout(50);
+    const juice = await phone.evaluate((id) => ({
+      out: !window.__app.match().players[id].alive,
+      pop: [...document.querySelectorAll('#pops .pop')].map((e) => e.textContent),
+      combo: window.__app.app.combo.n
+    }), victim);
+    // (直前のはじく確かめで当たっていれば、連続ヒットの言葉になる)
+    ok(juice.out && juice.pop.some((t) => /OUT!|ダブル!|トリプル!|連続!/.test(t)), `タップで当てると文字が浮かぶ (${juice.pop.join(',')})`);
+
+    // ---- 止まるとしゃがんで丸める
+    await phone.evaluate(() => { const m = window.__app.match(); m.stock[0] = 30; window.__app.me().balls = 1; });
+    await phone.waitForTimeout(400);
     const crouching = await phone.evaluate(() => ({ c: window.__app.me().crouch, b: window.__app.me().balls }));
     await phone.waitForFunction((b) => window.__app.me().balls > b, crouching.b, { timeout: 8000 }).catch(() => {});
     const made = await phone.evaluate(() => window.__app.me().balls);
-    await phone.mouse.up();
-    await phone.waitForTimeout(80);
+    await phone.mouse.move(100, 780);
+    await phone.mouse.down();
+    await phone.mouse.move(160, 780, { steps: 3 });
+    await phone.waitForTimeout(150);
     const stood = await phone.evaluate(() => window.__app.me().crouch);
-    ok(crouching.c, '押している間しゃがむ');
+    await phone.mouse.up();
+    ok(crouching.c, '止まると自動でしゃがむ');
     ok(made > crouching.b, `しゃがんでいると雪玉が増える (${crouching.b} → ${made})`);
-    ok(stood === false, '離すと立つ');
+    ok(stood === false, '動くと立つ');
+    // このあとの確かめのために、だれも丸められないよう戻しておく
+    await phone.evaluate(() => { const m = window.__app.match(); m.stock = [0, 0]; m.players.forEach((p) => { if (p.team === 0 && p.id !== m.human) p.balls = 0; }); });
 
     // ---- 2 本指: 移動しながら狙う
     const multi = await phone.evaluate(async () => {
@@ -260,6 +313,7 @@ async function run() {
     ok(hud2.out === 7 - hud2.alive && hud2.alive < 7, `退場すると上の表示が減る (あか 残り${hud2.alive} / 消えた印 ${hud2.out})`);
 
     // ---- 一時停止
+    await phone.waitForFunction(() => window.__app.match().phase === 'play', null, { timeout: 15000 });
     await phone.click('#btnPause');
     const t1 = await phone.evaluate(() => window.__app.match().time);
     await phone.waitForTimeout(500);
@@ -272,11 +326,15 @@ async function run() {
 
     // ---- 相手コートは 3 人まで
     section('相手コートは 3 人まで');
+    await phone.waitForFunction(() => window.__app.match().phase === 'play', null, { timeout: 15000 });
     const crowd = await phone.evaluate(async () => {
       const m = window.__app.match();
       const me = window.__app.me();
-      // あかを動かないようにし、あおの AI 3 人を相手コートへ
-      m.players.filter((p) => p.team === 1).forEach((p) => { p.balls = 0; p.ai.think = 999; p.ai.goal = null; });
+      // あかを全員そろえて奥で止め、だれも投げないようにする (前の確かめで減っていることがある)。
+      // あおの AI 3 人を相手コートへ
+      m.players.filter((p) => p.team === 1).forEach((p, i) => { p.alive = true; p.x = -4 + (i % 4) * 2.6; p.z = -16 - (i >> 2); p.balls = 0; p.ai.think = 999; p.ai.goal = null; });
+      m.players.filter((p) => p.team === 0).forEach((p) => { p.balls = 0; });
+      m.stock = [0, 0];
       const mates = m.players.filter((p) => p.team === 0 && p.alive && p !== me);
       mates.slice(0, 3).forEach((p, i) => { p.x = -4 + i * 1.6; p.z = -2; p.ai.think = 999; p.ai.goal = { x: p.x, z: -2 }; p.balls = 0; });
       mates.slice(3).forEach((p) => { p.ai.think = 999; p.ai.goal = null; });
@@ -310,7 +368,7 @@ async function run() {
     });
     ok(vt0.phase === 'vt' && vt0.alive === 2 && vt0.me, `投げる 2 人だけが残り、自分が投げる (${vt0.ban})`);
     ok(vt0.time === 'VT', '時計の所が VT になる');
-    const vtHide = await phone.evaluate(() => ['.stock', '#btnCrouch', '#stickZone'].map((q) => getComputedStyle(document.querySelector(q)).visibility));
+    const vtHide = await phone.evaluate(() => ['.stock', '#stickZone'].map((q) => getComputedStyle(document.querySelector(q)).visibility));
     ok(vtHide.every((v) => v === 'hidden'), `VT では使わない表示と操作を隠す (${vtHide.join(',')})`);
     // フラッグに当たる着地点を、投げるボタンのスライドで狙う
     await phone.waitForFunction(() => window.__app.match().vt.wait <= 0, null, { timeout: 5000 });
@@ -345,7 +403,7 @@ async function run() {
     ok(!vtRes.hidden && vtRes.by === 'vt' && vtRes.text.includes('ビクトリースロー'), `ビクトリースローで決着し、結果に出る (${vtRes.text.slice(-40)})`);
     await phone.click('#btnAgain');
     await phone.waitForFunction(() => window.__app.match().phase === 'play', null, { timeout: 10000 });
-    const back = await phone.evaluate(() => getComputedStyle(document.querySelector('#btnCrouch')).visibility);
+    const back = await phone.evaluate(() => getComputedStyle(document.querySelector('#stickZone')).visibility);
     ok(back === 'visible', '次の試合では操作が戻る');
 
     // ---- 試合の終わり
@@ -398,7 +456,23 @@ async function run() {
       for (let i = 0; i < 600; i++) C.step(m, 1 / 60);
       return (performance.now() - t0) / 600;
     });
+    // 狙いの補助は毎コマ計算する (相手選び + 先読み + 壁越しの着地点探し)。
+    // いちばん重いのは、狙う相手が壁の陰にいて、着地点を何通りも試すとき
+    const aimCost = await phone.evaluate(() => {
+      const C = window.Core;
+      const m = C.createMatch({ seed: 4, human: 1 });
+      m.phase = 'play';
+      const me = m.players[1];
+      me.x = 0; me.z = 3;
+      const q = m.players.find((p) => p.team === 1);
+      q.x = 0.3; q.z = -0.55; q.crouch = true;      // 中央シェルターの陰
+      const t0 = performance.now();
+      let n = 0;
+      for (let i = 0; i < 200; i++) if (C.assistAim(m, me, null, q)) n++;
+      return { ms: (performance.now() - t0) / 200, n };
+    });
     await cdp.send('Emulation.setCPUThrottlingRate', { rate: 1 });
+    ok(aimCost.n === 200 && aimCost.ms < 3, `狙いの補助 1 コマ ${aimCost.ms.toFixed(2)}ms (壁の陰の相手)`);
     ok(perf < 4, `ロジック 1 コマ ${perf.toFixed(2)}ms (16.7ms の枠に十分収まる)`);
     const info = await phone.evaluate(() => window.__app.info());
     ok(info.calls < 260, `描画の呼び出し ${info.calls} 回 / 三角形 ${info.tris}`);

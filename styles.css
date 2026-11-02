@@ -184,7 +184,7 @@ button { font: inherit; color: inherit; cursor: pointer; }
   text-shadow: 0 1px 3px rgba(0, 40, 90, .6);
 }
 
-.btn-crouch, .throw {
+.throw {
   position: absolute;
   pointer-events: auto;
   border-radius: 50%;
@@ -195,28 +195,19 @@ button { font: inherit; color: inherit; cursor: pointer; }
   font-weight: 900;
   touch-action: none;
 }
-.btn-crouch {
-  right: 150px;
-  bottom: calc(env(safe-area-inset-bottom) + 30px);
-  width: 82px; height: 82px;
-  border: 0;
-  background: rgba(255, 255, 255, .9);
-  color: var(--ink);
-  font-size: 14px;
-  box-shadow: 0 3px 12px rgba(30, 60, 100, .3);
-}
-.btn-crouch small, .throw small { font-size: 10px; font-weight: 700; opacity: .8; }
-.btn-crouch.on { background: #d7ecff; transform: scale(.94); }
-.btn-crouch .ring {
-  position: absolute; inset: -5px;
+.throw small { font-size: 10px; font-weight: 700; opacity: .8; }
+/* 丸めている進み具合 (投げるボタンのふち) */
+.throw .ring {
+  position: absolute; inset: -7px;
   border-radius: 50%;
   background: conic-gradient(var(--blue) calc(var(--p, 0) * 1turn), transparent 0);
-  -webkit-mask: radial-gradient(circle, transparent 44px, #000 45px);
-  mask: radial-gradient(circle, transparent 44px, #000 45px);
+  -webkit-mask: radial-gradient(circle, transparent 60px, #000 61px);
+  mask: radial-gradient(circle, transparent 60px, #000 61px);
   contain: strict;
   will-change: transform;
+  pointer-events: none;
 }
-.btn-crouch .label { position: relative; }
+.throw .label { position: relative; }
 .throw {
   right: 22px;
   bottom: calc(env(safe-area-inset-bottom) + 70px);
@@ -226,6 +217,7 @@ button { font: inherit; color: inherit; cursor: pointer; }
   color: var(--blue-d);
   font-size: 18px;
 }
+.throw.ready { background: radial-gradient(circle at 40% 35%, #fff, #ffe3df 60%, #ffb0a6); color: #c0281f; }
 .throw.on { box-shadow: 0 0 0 4px var(--gold), 0 4px 16px rgba(30, 60, 100, .35); }
 .throw.empty { color: #8a96a8; filter: saturate(.3); }
 .throw .balls {
@@ -334,5 +326,19 @@ body:has(#vTitle:not([hidden])) .controls { visibility: hidden; }
 
 /* ビクトリースロー中は、投げる操作だけ */
 #game.vt-mode .stock,
-#game.vt-mode .btn-crouch,
 #game.vt-mode .stick-zone { visibility: hidden; }
+
+/* 当てたときに浮かぶ文字 */
+.pops { position: absolute; inset: 0; pointer-events: none; overflow: hidden; }
+.pop {
+  position: absolute;
+  font-size: 30px;
+  font-weight: 900;
+  color: #fff;
+  -webkit-text-stroke: 6px #e0413a;
+  paint-order: stroke fill;
+  white-space: nowrap;
+  transform: translate(-50%, -50%);
+  letter-spacing: .02em;
+}
+.pop.big { font-size: 40px; -webkit-text-stroke-color: #ff8a00; }

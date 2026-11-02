@@ -41,18 +41,16 @@
   <div class="controls" id="controls">
     <div class="stick-zone" id="stickZone">
       <div class="stick" id="stick"><div class="knob" id="knob"></div></div>
-      <div class="hint" id="moveHint">ここをなぞって移動</div>
+      <div class="hint" id="moveHint">なぞって移動 ・ 止まるとしゃがむ</div>
     </div>
-    <button type="button" class="btn-crouch" id="btnCrouch">
-      <span class="ring" id="makeRing"></span>
-      <span class="label">しゃがむ<br><small>丸める</small></span>
-    </button>
     <div class="throw" id="throwPad">
+      <span class="ring" id="makeRing"></span>
       <div class="balls" id="myBalls"></div>
-      <span class="label">投げる<br><small>スライドで狙う</small></span>
+      <span class="label">投げる<br><small>はじいて狙う</small></span>
     </div>
   </div>
 
+  <div class="pops" id="pops"></div>
   <div class="banner" id="banner" hidden></div>
   <div class="warn" id="warn" hidden>敵陣はもう3人。<b>入ると反則負け</b></div>
 
@@ -76,10 +74,10 @@
           <li>あなたは<b>フォワード</b>(黄色の輪)。アウトになったら仲間に交代</li>
           <li><b>相手コートに入れるのは3人まで</b>。4人目が入るとそのセットは負け(上の「敵陣 n/3」)</li>
           <li>フォワードは自陣の<b>バックライン</b>(点線)より後ろへ下がれない。バックス(白帯)はフラッグの守り</li>
-          <li>雪玉はチームで<b>1セット90個</b>。しゃがむと1個ずつ丸める(最大5個)</li>
-          <li>シェルターの陰で<b>しゃがめば</b>当たらない。投げた直後は頭が出る</li>
+          <li>雪玉はチームで<b>1セット90個</b>。<b>止まるとしゃがんで</b>1個ずつ丸める(最大5個)</li>
+          <li>シェルターの陰でしゃがめば当たらない。投げた直後は頭が出る</li>
         </ul>
-        <p class="how">左側をなぞって移動。右下の<b>投げる</b>を押したまま投げたい方へスライドすると狙いが出て、離すと投げる(タップだと近くの相手へ)。狙いの輪が<b>赤</b>なら当たるコース。灰色は壁に当たる。壁の陰の相手は、<b>奥へ落とすと頭越しに</b>当たる。</p>
+        <p class="how">左側をなぞって移動。右下の<b>投げる</b>をタップすると、足もとに輪が出ている相手へ投げる。<b>相手の方へはじく</b>と、その相手を狙う。輪が<b>赤</b>なら当たるコース(灰色は壁に隠れている)。動きの先読みも、壁越しの山なりも自動。</p>
       </details>
     </div>
   </section>

@@ -116,8 +116,11 @@ test('当たったら退場。味方の玉では退場しない', () => {
   mate.x = -4; mate.z = 3;
   foe.x = -4; foe.z = -1;
   foe.balls = 0; m.stock[1] = 0;
+  mate.balls = 0; m.stock[0] = 0;   // 味方の AI が先に当ててしまわないように
   // 味方の頭上を越えて、相手の足もとへ
-  C.throwBall(m, a, foe.x, foe.z);
+  const ball = C.throwBall(m, a, foe.x, foe.z);
+  foe.ai.seen[ball.id] = true;      // 相手の AI がよけず、
+  foe.ai.think = 99;                // 動きもしないように
   run(m, 1.0, {});
   assert.ok(mate.alive, '味方は無事');
   assert.ok(!foe.alive, '相手は退場');
@@ -125,21 +128,162 @@ test('当たったら退場。味方の玉では退場しない', () => {
   assert.ok(hit && hit.by === a.id && hit.player === foe.id);
 });
 
-test('バックはセンターラインを越えられない。フォワードは越えられる', () => {
+test('フォワードは自陣のバックラインより後ろへ下がれない。バックスは相手コートにも入れる', () => {
   const m = playing();
-  const back = m.players.find((p) => p.team === 0 && p.role === 'B');
   const fwd = m.players.find((p) => p.team === 0 && p.role === 'F');
-  back.x = 4; back.z = 2; fwd.x = -4; fwd.z = 2;
-  for (let i = 0; i < 120; i++) {
-    C.movePlayer(back, { mz: -1 }, 1 / 60);
-    C.movePlayer(fwd, { mz: -1 }, 1 / 60);
+  const back = m.players.find((p) => p.team === 0 && p.role === 'B');
+  fwd.x = -4; fwd.z = 9;
+  for (let i = 0; i < 120; i++) C.movePlayer(fwd, { mz: 1 }, 1 / 60);
+  assert.ok(Math.abs(fwd.z - R.BACK_LINE_U) < 1e-9, `あおのフォワード z=${fwd.z}`);
+  const red = m.players.find((p) => p.team === 1 && p.role === 'F');
+  red.x = 4; red.z = -9;
+  for (let i = 0; i < 120; i++) C.movePlayer(red, { mz: -1 }, 1 / 60);
+  assert.ok(Math.abs(red.z + R.BACK_LINE_U) < 1e-9, `あかのフォワード z=${red.z}`);
+  back.x = 4; back.z = 2;
+  for (let i = 0; i < 60; i++) C.movePlayer(back, { mz: -1 }, 1 / 60);
+  assert.ok(back.z < -1, `バックス z=${back.z}`);
+});
+
+test('相手コートに 4 人目が入ると、そのセットは負け (3 人までは続く)', () => {
+  const m = playing({ human: null });
+  m.players.forEach((p) => { p.balls = 0; });
+  m.stock = [0, 0];
+  const blues = m.players.filter((p) => p.team === 0);
+  blues.slice(0, 3).forEach((p, i) => { p.x = -4 + i * 2; p.z = -3; });
+  C.step(m, 1 / 60);
+  assert.strictEqual(m.phase, 'play', '3 人までは続く');
+  blues[3].x = 4; blues[3].z = -3;
+  C.step(m, 1 / 60);
+  assert.strictEqual(m.phase, 'setOver');
+  assert.strictEqual(m.setResults[0].winner, 1);
+  assert.strictEqual(m.setResults[0].reason, 'over');
+});
+
+test('AI は、人が操作する仲間が先に入っていても 4 人目にならない', () => {
+  // 人 + AI のフォワード 2 人が相手コートにいる。相手は 1 人だけ (フラッグから離れている) なので、
+  // 守りがいないフラッグへ、残りのフォワードも走りたくなる場面。だれも球を持たない
+  for (let seed = 1; seed <= 6; seed++) {
+    const m = C.createMatch({ seed, human: 1, skill: [0.9, 0.1] });
+    m.phase = 'play';
+    m.players.forEach((p) => { p.balls = 0; });
+    m.stock = [0, 0];
+    const fwds = m.players.filter((p) => p.team === 0 && p.role === 'F');
+    const me = m.players[1];
+    me.x = 4.5; me.z = -3;
+    const others = fwds.filter((p) => p !== me);
+    others[0].x = -4; others[0].z = -2;
+    others[1].x = -2.5; others[1].z = -2;
+    others[2].x = 0.5; others[2].z = 2;           // これが 4 人目になりうる
+    m.players.filter((p) => p.team === 1).forEach((p, i) => { p.alive = i === 6; p.x = 4.5; p.z = -8.8; });
+    let most = 0;
+    for (let i = 0; i < 60 * 8 && m.phase === 'play'; i++) {
+      C.step(m, 1 / 60, { crouch: true });
+      most = Math.max(most, m.players.filter((p) => p.team === 0 && C.inEnemyCourt(p)).length);
+    }
+    assert.ok(most <= R.MAX_IN_ENEMY, `seed ${seed}: 相手コートに ${most} 人`);
+    assert.ok(!m.setResults.some((r) => r.reason === 'over'), `seed ${seed}: 反則負けになった`);
   }
-  assert.ok(back.z >= 0.3 - 1e-9, `バック z=${back.z}`);
-  assert.ok(fwd.z < -3, `フォワード z=${fwd.z}`);
-  const red = m.players.find((p) => p.team === 1 && p.role === 'B');
-  red.x = 4; red.z = -2;
-  for (let i = 0; i < 120; i++) C.movePlayer(red, { mz: 1 }, 1 / 60);
-  assert.ok(red.z <= -0.3 + 1e-9, `あかのバック z=${red.z}`);
+});
+
+test('どこからでも、壁を回り込んで目的地に着く (400 通り)', () => {
+  // 横へずらすだけの回り込みだと、縦に並んだ 2 つの壁 (シャトーとシェルター) のあいだで
+  // 行ったり来たりして止まり、フラッグを取りに行けなかった
+  const rng = C.mulberry32(5);
+  let ng = 0;
+  for (let k = 0; k < 400; k++) {
+    const p = { x: (rng() * 2 - 1) * 4.6, z: (rng() * 2 - 1) * 17.6, team: 0, role: 'B', alive: true, crouch: false, standT: 0, vx: 0, vz: 0, face: 0 };
+    C.pushOutOfShelters(p);
+    const g = { x: (rng() * 2 - 1) * 4.5, z: (rng() * 2 - 1) * 17.5 };
+    C.pushOutOfShelters(g);
+    let i = 0;
+    for (; i < 60 * 15; i++) { const st = C.steer(p, g.x, g.z); if (st.d < 0.2) break; C.movePlayer(p, st, 1 / 60); }
+    if (i >= 60 * 15) ng++;
+  }
+  assert.strictEqual(ng, 0, `着かなかった ${ng} / 400`);
+  // 前に止まっていた場所: 相手のシェルターの後ろからフラッグへ
+  const p = { x: -1.7, z: -6.3, team: 0, role: 'F', alive: true, crouch: false, standT: 0, vx: 0, vz: 0, face: 0 };
+  const f = C.flagPos(1);
+  let t = 0;
+  for (; t < 60 * 6; t++) { const st = C.steer(p, f.x, f.z); if (st.d < R.FLAG_R) break; C.movePlayer(p, st, 1 / 60); }
+  assert.ok(t < 60 * 6, `フラッグまで ${(t / 60).toFixed(1)} 秒`);
+});
+
+test('ビクトリースローの照準: 当たる着地点は当たり、横へずらすと外れる', () => {
+  const f = C.flagPos(1);
+  const x = 0, z = f.z + R.VT_DIST;
+  const aim = C.findAim([], 0, x, z, { team: 1, crouch: false, standT: 0 }, f.x, f.z);
+  assert.ok(C.predictVT(0, x, z, aim.x, aim.z));
+  assert.ok(!C.predictVT(0, x, z, aim.x + 1.5, aim.z));
+});
+
+test('フラッグはバックスが抜いてもよい', () => {
+  const m = playing({ human: null });
+  m.players.forEach((p) => { p.balls = 0; });
+  const back = m.players.find((p) => p.team === 0 && p.role === 'B');
+  const f = C.flagPos(1);
+  back.x = f.x + 0.3; back.z = f.z + 0.3;
+  C.step(m, 1 / 60);
+  assert.strictEqual(m.setResults[0].reason, 'flag');
+  assert.strictEqual(m.setResults[0].winner, 0);
+});
+
+test('ポイント: 全員アウト・フラッグの勝ちは 10、負けは残り人数。時間切れは両方とも残り人数', () => {
+  assert.deepStrictEqual(C.setPoints(0, 'flag', [5, 3]), [10, 3]);
+  assert.deepStrictEqual(C.setPoints(1, 'allout', [0, 4]), [0, 10]);
+  assert.deepStrictEqual(C.setPoints(0, 'time', [5, 3]), [5, 3]);
+  assert.deepStrictEqual(C.setPoints(-1, 'time', [4, 4]), [4, 4]);
+  assert.deepStrictEqual(C.setPoints(1, 'over', [7, 6]), [7, 10]);
+});
+
+/** セットの結果を作る: winner, reason, あおの残り, あかの残り */
+function forceSet(m, winner, reason, a0, a1) {
+  run(m, R.COUNTDOWN + 0.1, {});
+  m.players.forEach((p) => { p.balls = 0; });
+  m.stock = [0, 0];
+  const kill = (team, n) => m.players.filter((p) => p.team === team).slice(n).forEach((p) => { p.alive = false; });
+  kill(0, a0); kill(1, a1);
+  if (reason === 'time') m.time = 0.001;
+  if (reason === 'flag') { const w = m.players.find((p) => p.team === winner && p.alive); const f = C.flagPos(1 - winner); w.x = f.x; w.z = f.z; }
+  C.step(m, 1 / 60, {});
+  assert.strictEqual(m.setResults[m.setResults.length - 1].reason, reason);
+  run(m, R.SET_OVER + 0.1, {});
+}
+
+test('セット数が同じなら合計ポイントで決まる', () => {
+  const m = C.createMatch({ seed: 2, human: 0 });
+  forceSet(m, 0, 'flag', 6, 2);    // あお 10 - あか 2
+  forceSet(m, 1, 'flag', 1, 7);    // あお 1 - あか 10
+  forceSet(m, -1, 'time', 3, 3);   // 3 - 3
+  assert.strictEqual(m.phase, 'matchOver');
+  assert.deepStrictEqual(m.setWins, [1, 1]);
+  assert.deepStrictEqual(m.points, [14, 15]);
+  assert.strictEqual(m.winner, 1);
+  assert.strictEqual(m.decidedBy, 'points');
+});
+
+test('セット数もポイントも同じならビクトリースローで決まる', () => {
+  const m = C.createMatch({ seed: 3, human: 0 });
+  forceSet(m, 0, 'flag', 5, 2);    // 10 - 2
+  forceSet(m, 1, 'flag', 2, 5);    // 2 - 10
+  forceSet(m, -1, 'time', 4, 4);   // 4 - 4
+  assert.strictEqual(m.phase, 'vt');
+  assert.deepStrictEqual(m.points, [16, 16]);
+  const me = m.players[m.human];
+  assert.ok(me.alive && me.team === 0, '自分が投げる');
+  const f = C.flagPos(1);
+  assert.ok(Math.abs(Math.hypot(me.x - f.x, me.z - f.z) - R.VT_DIST) < 1e-9, 'フラッグから 12m');
+  // 自分は当たる所へ、毎回投げる
+  const aim = C.findAim([], 0, me.x, me.z, { team: 1, crouch: false, standT: 0 }, f.x, f.z);
+  assert.ok(aim, '当たる着地点がある');
+  let guard = 0;
+  while (m.phase === 'vt' && guard++ < 60 * 60) C.step(m, 1 / 60, { throwAt: aim });
+  const ev = C.drainEvents(m);
+  const mine = ev.filter((e) => e.type === 'vtThrow' && e.team === 0);
+  assert.ok(mine.length >= 1 && mine.every((e) => e.hit), '狙った玉はフラッグに当たる');
+  run(m, R.SET_OVER + 0.1, {});
+  assert.strictEqual(m.phase, 'matchOver');
+  assert.ok(m.winner === 0 || m.winner === 1);
+  assert.strictEqual(m.decidedBy, 'vt');
 });
 
 test('シェルターはすり抜けられない (どの向きからぶつかっても)', () => {
@@ -172,7 +316,7 @@ test('全員退場させたら勝ち。時間切れは残り人数で決まり�
   let m = playing();
   m.players.filter((p) => p.team === 1).forEach((p) => { p.alive = false; });
   C.step(m, 1 / 60, {});
-  assert.deepStrictEqual(m.setResults[0], { winner: 0, reason: 'allout', alive: [7, 0] });
+  assert.deepStrictEqual(m.setResults[0], { winner: 0, reason: 'allout', alive: [7, 0], points: [10, 0] });
 
   m = playing({ human: null });
   m.players[8].alive = false;      // あかを 1 人減らす
@@ -274,14 +418,17 @@ function autoplay(seed, skill) {
         const cz = Math.max(s.z - s.d / 2, Math.min(p.z, s.z + s.d / 2));
         if (Math.hypot(p.x - cx, p.z - cz) < R.PLAYER_R - 0.05) bad++;
       }
-      if (p.role === 'B' && C.side(p.team) * p.z < 0.3 - 1e-6) bad++;
+      if (p.role === 'F' && C.side(p.team) * p.z > R.BACK_LINE_U + 1e-6) bad++;
+    }
+    for (const team of [0, 1]) {
+      if (m.players.filter((p) => p.team === team && C.inEnemyCourt(p)).length > R.MAX_IN_ENEMY) bad++;
     }
     for (const e of C.drainEvents(m)) if (e.type === 'setEnd') reasons[e.reason] = (reasons[e.reason] || 0) + 1;
   }
   return { m, reasons, bad };
 }
 
-test('AI どうしで 30 試合: 必ず終わり、選手が壁にめりこまず、バックは自陣にいる', () => {
+test('AI どうしで 30 試合: 必ず終わり、壁にめりこまず、フォワードはバックラインより前、相手コートは 3 人まで', () => {
   let w = [0, 0, 0];
   const all = {};
   for (let seed = 1; seed <= 30; seed++) {
@@ -294,6 +441,7 @@ test('AI どうしで 30 試合: 必ず終わり、選手が壁にめりこま�
   // 同じ強さなら、どちらの陣地でも勝てる (向きの違いで偏らない)
   assert.ok(w[0] >= 8 && w[1] >= 8, `勝ち数 あお${w[0]} あか${w[1]} 分${w[2]}`);
   assert.ok(all.allout > 0 && all.time > 0, JSON.stringify(all));
+  assert.ok(!all.over, `AI が 4 人目の反則をした: ${JSON.stringify(all)}`);
 });
 
 test('強い AI は弱い AI によく勝つ', () => {

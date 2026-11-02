@@ -24,6 +24,10 @@
     HALF_L: 18,           // コート 36m
     FLAG_U: 17.2,         // フラッグは自陣エンドライン近く (自陣から見た u)
     FLAG_R: 0.75,         // フラッグに触れたとみなす距離
+    BACK_LINE_U: 11,      // バックライン (センターから 11m・エンドラインから 7m)。公式の図が無いので目安
+    MAX_IN_ENEMY: 3,      // 相手コートに入れるのは 3 人まで。4 人目が入るとそのセット負け
+    WIN_POINTS: 10,       // 全員アウト・フラッグで勝つと 10 ポイント
+    VT_DIST: 12,          // ビクトリースロー: フラッグまでの距離
     PLAYER_R: 0.3,
     STAND_H: 1.7,
     CROUCH_H: 0.85,       // シェルター (0.9) より低い
@@ -73,14 +77,14 @@
 
   // ------------------------------------------------------------ コート
   /**
-   * シェルター 7 基 (各陣 キャッスル 1 + シェルター 2、中央 1)。
+   * 公式: シェルター 5 基 (中央 1 + 各陣 2) とシャトー 2 基 (各陣 1)。
    * w: 横幅 (x)、d: 奥行き (z)、h: 高さ。
    */
   function makeShelters() {
     const list = [{ x: 0, z: 0, w: 1.8, d: 0.45, h: 0.9, kind: 'center', team: -1 }];
     for (const team of [0, 1]) {
       const s = side(team);
-      list.push({ x: 0, z: s * 14.6, w: 2.6, d: 0.9, h: 1.0, kind: 'castle', team });
+      list.push({ x: 0, z: s * 14.6, w: 2.6, d: 0.9, h: 1.0, kind: 'chateau', team });
       list.push({ x: -2.6, z: s * 8, w: 1.3, d: 0.45, h: 0.9, kind: 'shelter', team });
       list.push({ x: 2.6, z: s * 8, w: 1.3, d: 0.45, h: 0.9, kind: 'shelter', team });
     }
@@ -124,7 +128,9 @@
       human: opt.human === undefined ? 0 : opt.human,
       setNo: 0,
       setWins: [0, 0],
-      setResults: [],      // { winner: 0|1|-1, reason }
+      setResults: [],      // { winner: 0|1|-1, reason, alive, points }
+      points: [0, 0],      // 全セットの合計ポイント
+      vt: null,            // ビクトリースロー
       phase: 'countdown',
       phaseTime: 0,
       time: 0,
@@ -152,7 +158,8 @@
       const s = side(team);
       const fx = [-4.2, -2, 2, 4.2];
       const bx = [-3.4, 0, 3.4];
-      for (let i = 0; i < R.FORWARDS; i++) m.players.push(newPlayer(id++, team, 'F', i + 1, fx[i] * s, s * 16.8));
+      // フォワードはバックラインより前から
+      for (let i = 0; i < R.FORWARDS; i++) m.players.push(newPlayer(id++, team, 'F', i + 1, fx[i] * s, s * (R.BACK_LINE_U - 0.5)));
       for (let i = 0; i < R.BACKS; i++) m.players.push(newPlayer(id++, team, 'B', R.FORWARDS + i + 1, bx[i] * s, s * 15.9));
     }
     m.stock = [R.BALLS_PER_SET - 7 * R.START_CARRY, R.BALLS_PER_SET - 7 * R.START_CARRY];
@@ -306,12 +313,15 @@
     }
   }
 
-  /** 選手が立ち入れる範囲。バックは自陣だけ。 */
+  /**
+   * 選手が立ち入れる範囲。フォワードは自陣のバックラインより後ろへ下がれない。
+   * バックスはコート全体 (ただし相手コートに入れるのは全体で 3 人まで。これは反則として別に見る)。
+   */
   function limits(p) {
     const s = side(p.team);
     let zmin = -R.HALF_L + R.PLAYER_R, zmax = R.HALF_L - R.PLAYER_R;
-    if (p.role === 'B') {
-      if (s > 0) zmin = 0.3; else zmax = -0.3;
+    if (p.role === 'F') {
+      if (s > 0) zmax = R.BACK_LINE_U; else zmin = -R.BACK_LINE_U;
     }
     return { xmin: -R.HALF_W + R.PLAYER_R, xmax: R.HALF_W - R.PLAYER_R, zmin, zmax };
   }
@@ -396,28 +406,60 @@
     return best;
   }
 
-  /** 目的地へ向かう向き。間にシェルターがあれば横へ回り込む。 */
+  /**
+   * 目的地へ向かう向き。間にシェルターがあれば、その角を回り込む。
+   * 角は「そこまで真っすぐ行ける」ものだけから、遠回りが少ない順に選ぶ
+   * (横へずらすだけだと、縦に並んだ 2 つの壁のあいだで行ったり来たりして止まっていた)。
+   */
   function steer(p, gx, gz) {
-    const sh = blockingShelter(p.x, p.z, gx, gz, R.PLAYER_R + 0.08);
+    // 押し出される距離 (PLAYER_R) より少しだけ細く見る。太く見ると、壁ぎわに立った時点で
+    // 「箱の中」になって、ふさがっていることに気づけない
+    const r = R.PLAYER_R - 0.02;
+    const sh = blockingShelter(p.x, p.z, gx, gz, r);
     let tx = gx, tz = gz;
     if (sh) {
-      const margin = R.PLAYER_R + 0.25;
-      const left = sh.x - sh.w / 2 - margin, right = sh.x + sh.w / 2 + margin;
-      const goLeft = Math.abs(gx - left) + Math.abs(p.x - left) < Math.abs(gx - right) + Math.abs(p.x - right);
-      tx = goLeft ? left : right;
-      tz = p.z;
-      if (Math.abs(p.x - tx) < 0.1) tz = gz;
+      const mg = R.PLAYER_R + 0.3;
+      const xs = [sh.x - sh.w / 2 - mg, sh.x + sh.w / 2 + mg];
+      const zs = [sh.z - sh.d / 2 - mg, sh.z + sh.d / 2 + mg];
+      let best = null, bestC = Infinity;
+      for (const cx of xs) {
+        for (const cz of zs) {
+          if (Math.abs(cx) > R.HALF_W - R.PLAYER_R) continue;
+          const d0 = Math.hypot(cx - p.x, cz - p.z);
+          if (d0 < 0.12) continue;                         // もう着いている角
+          const free = !blockingShelter(p.x, p.z, cx, cz, r);
+          const cost = d0 + Math.hypot(gx - cx, gz - cz) + (free ? 0 : 50) +
+            (blockingShelter(cx, cz, gx, gz, r) ? 1.5 : 0);
+          if (cost < bestC) { bestC = cost; best = { x: cx, z: cz }; }
+        }
+      }
+      if (best) { tx = best.x; tz = best.z; }
     }
     const dx = tx - p.x, dz = tz - p.z;
     const d = Math.hypot(dx, dz);
     if (d < 0.08) return { mx: 0, mz: 0, d: Math.hypot(gx - p.x, gz - p.z) };
-    const k = Math.min(1, d / 0.35);
+    const k = sh ? 1 : Math.min(1, d / 0.35);
     return { mx: dx / d * k, mz: dz / d * k, d: Math.hypot(gx - p.x, gz - p.z) };
   }
 
   function spotTaken(m, p, idx) {
     return m.players.some((q) => q !== p && q.alive && q.team === p.team && q.ai.spot === idx);
   }
+
+  function inEnemyCourt(p) { return p.alive && side(p.team) * p.z < 0; }
+
+  /** 相手コートにいる (または向かっている) 仲間の数 */
+  function enemyCourtCount(m, team, except) {
+    let n = 0;
+    for (const q of m.players) {
+      if (q === except || !q.alive || q.team !== team) continue;
+      const heading = q.ai && q.ai.goal && side(q.team) * q.ai.goal.z < 0 && !isHuman(m, q);
+      if (inEnemyCourt(q) || heading) n++;
+    }
+    return n;
+  }
+  /** この選手が相手コートへ入っても 3 人以内か */
+  function mayEnter(m, p) { return inEnemyCourt(p) || enemyCourtCount(m, p.team, p) < R.MAX_IN_ENEMY; }
 
   /** u は「自陣から見た位置」。大きいほど自陣の奥、小さいほど敵陣寄り。 */
   function uOf(p) { return side(p.team) * p.z; }
@@ -429,7 +471,9 @@
       const sp = spots[i];
       if (!filter(sp)) continue;
       if (spotTaken(m, p, i)) continue;
-      if (p.role === 'B' && sp.u < 0.5) continue;
+      if (p.role === 'B' && sp.u < 0.5) continue;           // AI のバックスは自陣で守る
+      if (p.role === 'F' && sp.u > R.BACK_LINE_U) continue;  // フォワードはバックラインより後ろへ行けない
+      if (sp.u < 0 && !mayEnter(m, p)) continue;            // 相手コートは 3 人まで
       const sc = score(sp);
       if (sc < bestS) { bestS = sc; best = i; }
     }
@@ -504,10 +548,9 @@
     return null;
   }
 
-  function aiInput(m, p, dt) {
+  function aiInputRaw(m, p, dt) {
     const ai = p.ai;
     const s = skillOf(m, p);
-    const S = side(p.team);
     const input = { mx: 0, mz: 0, crouch: false, throwAt: null };
 
     // よける
@@ -552,7 +595,22 @@
       input.crouch = true;
     }
     if (input.throwAt) input.crouch = false;
-    void S;
+    return input;
+  }
+
+  /**
+   * AI の入力に、相手コートの人数の決まりをかぶせる。
+   * センターラインをまたぐ直前に数え直す (よけた拍子や、人が操作する仲間が先に入ったとき)。
+   */
+  function aiInput(m, p, dt) {
+    const input = aiInputRaw(m, p, dt);
+    const S = side(p.team);
+    if (!inEnemyCourt(p) && input.mz * S < 0 && S * p.z < 0.6 && enemyCourtCount(m, p.team, p) >= R.MAX_IN_ENEMY) {
+      input.mz = 0;
+      p.ai.dz = 0;
+      const ai = p.ai;
+      if (ai.goal && S * ai.goal.z < 0) { ai.goal = null; ai.spot = -1; ai.rush = false; }
+    }
     return input;
   }
 
@@ -570,7 +628,7 @@
       const defenders = enemies.filter((q) => Math.hypot(q.x - enemyFlag.x, q.z - enemyFlag.z) < 8).length;
       const dFlag = Math.hypot(p.x - enemyFlag.x, p.z - enemyFlag.z);
       const late = m.time < 20 && aliveCount(m, p.team) <= aliveCount(m, 1 - p.team);
-      if (defenders === 0 || (defenders <= 1 && dFlag < 13) || (defenders <= 2 && dFlag < 11 && m.rng() < 0.5) || (late && dFlag < 18)) {
+      if (mayEnter(m, p) && (defenders === 0 || (defenders <= 1 && dFlag < 10 && p.balls > 0) || (late && dFlag < 16))) {
         ai.rush = true; ai.spot = -1;
         ai.goal = { x: enemyFlag.x, z: enemyFlag.z };
         return;
@@ -594,16 +652,19 @@
       return;
     }
 
-    const minU = p.role === 'B' ? 0.5 : -R.HALF_L;
+    // バックスはフラッグの守り。相手が近く (センターの向こう 6m より手前) にいるうちはシャトーのあたりから離れない
+    const guard = enemies.some((q) => side(p.team) * q.z > -6);
+    const minU = p.role === 'B' ? (guard ? 12 : 0.5) : -R.HALF_L;
     const inRange = (x, z) => enemies.some((q) => Math.hypot(q.x - x, q.z - z) < R.RANGE - 2);
     const idle = !inRange(p.x, p.z);
 
-    if (!at) {
+    if (at && p.role === 'B' && at.u < minU) { ai.spot = -1; ai.goal = null; }   // 守りに戻る
+    if (ai.spot < 0) {
       // まず近くのかくれ場所へ (前寄り)
       const i = pickSpot(m, p, (sp) => sp.u >= minU && sp.u <= myU + 2,
-        (sp) => Math.hypot(sp.x - p.x, sp.z - p.z) + (p.role === 'B' && sp.u < 6 ? 6 : 0));
+        (sp) => Math.hypot(sp.x - p.x, sp.z - p.z));
       if (i >= 0) { setSpot(ai, spots, i); return; }
-      if (idle) ai.goal = { x: p.x, z: side(p.team) * Math.max(minU, myU - 4) };
+      if (idle) ai.goal = { x: p.x, z: side(p.team) * Math.max(minU, myU - 4, mayEnter(m, p) ? -99 : 0.6) };
       return;
     }
 
@@ -616,7 +677,7 @@
     if (i >= 0) setSpot(ai, spots, i);
     else if (idle) {
       ai.spot = -1; ai.arrived = false;
-      ai.goal = { x: p.x, z: side(p.team) * Math.max(minU, myU - 4) };
+      ai.goal = { x: p.x, z: side(p.team) * Math.max(minU, myU - 4, mayEnter(m, p) ? -99 : 0.6) };
     } else ai.holdT = 1 + m.rng() * 2;
   }
 
@@ -635,9 +696,15 @@
   }
 
   function checkSetEnd(m) {
-    // フラッグ: 相手陣のフラッグに、生き残っているフォワードが触れた
+    // 相手コートに 4 人目が入ったチームは、そのセット負け
+    for (const team of [0, 1]) {
+      let n = 0;
+      for (const p of m.players) if (p.team === team && inEnemyCourt(p)) n++;
+      if (n > R.MAX_IN_ENEMY) return endSet(m, 1 - team, 'over');
+    }
+    // フラッグ: 相手のフラッグを抜いた (だれでもよい)
     for (const p of m.players) {
-      if (!p.alive || p.role !== 'F') continue;
+      if (!p.alive) continue;
       const f = flagPos(1 - p.team);
       if (Math.hypot(p.x - f.x, p.z - f.z) <= R.FLAG_R) return endSet(m, p.team, 'flag', p.id);
     }
@@ -654,19 +721,143 @@
     return false;
   }
 
+  /**
+   * セットのポイント。1 人 = 1 ポイント。
+   * 全員アウト・フラッグ・(相手の 4 人目の反則) で勝ったチームは 10 ポイント、負けたチームは残っている人数。
+   * 時間切れは、どちらもコート内の人数。
+   */
+  function setPoints(winner, reason, alive) {
+    if (reason === 'time' || winner < 0) return alive.slice();
+    const pts = alive.slice();
+    pts[winner] = R.WIN_POINTS;
+    return pts;
+  }
+
   function endSet(m, winner, reason, by) {
-    m.setResults.push({ winner, reason, alive: [aliveCount(m, 0), aliveCount(m, 1)] });
+    const alive = [aliveCount(m, 0), aliveCount(m, 1)];
+    const points = setPoints(winner, reason, alive);
+    m.setResults.push({ winner, reason, alive, points });
+    m.points[0] += points[0]; m.points[1] += points[1];
     if (winner >= 0) m.setWins[winner]++;
     m.phase = 'setOver';
     m.phaseTime = R.SET_OVER;
     m.balls = [];
-    m.events.push({ type: 'setEnd', winner, reason, by: by == null ? null : by, setNo: m.setNo });
-    // 2 セット先取、または 3 セット終わったら試合終了
+    m.events.push({ type: 'setEnd', winner, reason, by: by == null ? null : by, setNo: m.setNo, points });
+    // 2 セット先取、または 3 セット終わったら試合終了。
+    // セット数が同じならポイントの合計、それも同じならビクトリースロー
     const need = Math.floor(R.SETS / 2) + 1;
     if (m.setWins[0] >= need || m.setWins[1] >= need || m.setNo >= R.SETS) {
-      m.winner = m.setWins[0] > m.setWins[1] ? 0 : m.setWins[1] > m.setWins[0] ? 1 : -1;
+      if (m.setWins[0] !== m.setWins[1]) { m.winner = m.setWins[0] > m.setWins[1] ? 0 : 1; m.decidedBy = 'sets'; }
+      else if (m.points[0] !== m.points[1]) { m.winner = m.points[0] > m.points[1] ? 0 : 1; m.decidedBy = 'points'; }
+      else m.goVT = true;
     }
     return true;
+  }
+
+  // ------------------------------------------------------------ ビクトリースロー
+  /**
+   * セット数もポイントも同じとき。各チーム 1 人ずつ、相手のフラッグへ交互に 1 球ずつ投げる。
+   * 当てた数で差がついた回で決まる (サドンデス)。
+   */
+  function startVT(m) {
+    m.phase = 'vt';
+    m.balls = [];
+    const thrower = (team) => {
+      const base = team === 0 && m.humanBase != null ? m.players[m.humanBase] : m.players.find((p) => p.team === team && p.role === 'F');
+      const f = flagPos(1 - team);
+      base.alive = true; base.crouch = false; base.standT = 0; base.cd = 0;
+      base.x = 0; base.z = f.z + side(1 - team) * -R.VT_DIST;
+      base.face = team === 0 ? Math.PI : 0;
+      base.balls = 1;
+      return base.id;
+    };
+    for (const p of m.players) p.alive = false;
+    const ids = [thrower(0), thrower(1)];
+    if (m.human != null) m.human = ids[0];
+    m.vt = { round: 1, turn: 0, hits: [[], []], ids, wait: 1.2, flying: false };
+    m.events.push({ type: 'vtStart' });
+  }
+
+  /** フラッグ (ポールと旗) を的にした当たり判定 */
+  function hitsFlag(b, team) {
+    const f = flagPos(team);
+    return Math.hypot(b.x - f.x, b.z - f.z) <= 0.45 + R.BALL_R && b.y <= 2.25;
+  }
+
+  function stepVT(m, dt, input) {
+    const vt = m.vt;
+    const team = vt.turn;
+    const p = m.players[vt.ids[team]];
+    if (!vt.flying) {
+      vt.wait -= dt;
+      p.cd = Math.max(0, p.cd - dt);
+      let at = null;
+      if (isHuman(m, p)) { if (input && input.throwAt && vt.wait <= 0) at = input.throwAt; }
+      else if (vt.wait <= 0) {
+        // AI: フラッグに当たる着地点を探して、腕前ぶんぶれる
+        const f = flagPos(1 - team);
+        const aim = findAim([], team, p.x, p.z, { team: 1 - team, crouch: false, standT: 0 }, f.x, f.z) || { x: f.x, z: f.z + side(1 - team) * -0.0 };
+        const err = lerp(1.1, 0.35, m.skill[team]);
+        at = { x: aim.x + gauss(m.rng) * err, z: aim.z + gauss(m.rng) * err * 1.4 };
+      }
+      if (at) {
+        p.balls = 1; p.cd = 0;
+        m.phase = 'play';             // throwBall は play 中だけ受け付ける
+        const b = throwBall(m, p, at.x, at.z);
+        m.phase = 'vt';
+        if (b) vt.flying = true;
+      }
+      return;
+    }
+    // 飛んでいる球
+    const b = m.balls[0];
+    let res = null;
+    if (!b) res = 'miss';
+    else {
+      const n = Math.max(1, Math.ceil(Math.hypot(b.vx, b.vy, b.vz) * dt / 0.07));
+      const h = dt / n;
+      for (let k = 0; k < n && !res; k++) {
+        b.x += b.vx * h; b.z += b.vz * h; b.y += b.vy * h - 0.5 * R.G * h * h; b.vy -= R.G * h;
+        if (hitsFlag(b, 1 - team)) res = 'hit';
+        else {
+          const c = ballCollide(b, null);
+          if (c) { res = 'miss'; if (c.kind !== 'out') m.events.push({ type: 'splat', on: c.kind, x: b.x, y: Math.max(b.y, 0.02), z: b.z }); }
+        }
+      }
+    }
+    if (!res) return;
+    m.balls = [];
+    vt.flying = false;
+    vt.hits[team].push(res === 'hit');
+    m.events.push({ type: 'vtThrow', team, hit: res === 'hit', round: vt.round, x: b ? b.x : 0, y: b ? b.y : 0, z: b ? b.z : 0 });
+    if (team === 0) { vt.turn = 1; vt.wait = 1.0; return; }
+    // 1 回ずつ投げ終わった
+    const a = vt.hits[0][vt.round - 1], c = vt.hits[1][vt.round - 1];
+    if (a !== c) { finishVT(m, a ? 0 : 1); return; }
+    if (vt.round >= 10) { finishVT(m, m.rng() < 0.5 ? 0 : 1); return; } // 念のための打ち切り
+    vt.round++; vt.turn = 0; vt.wait = 1.2;
+    m.events.push({ type: 'vtRound', round: vt.round });
+  }
+
+  /** ビクトリースローで、(x,z) から (tx,tz) へ投げた球が相手のフラッグに当たるか (照準の色に使う) */
+  function predictVT(team, x, z, tx, tz) {
+    const L = launch(x, z, tx, tz);
+    const b = { x: x + L.ux * (R.PLAYER_R + 0.05), z: z + L.uz * (R.PLAYER_R + 0.05), y: R.THROW_Y, vx: L.vx, vy: L.vy, vz: L.vz, team };
+    const dt = 0.005;
+    for (let i = 0; i < 600; i++) {
+      b.x += b.vx * dt; b.z += b.vz * dt; b.y += b.vy * dt - 0.5 * R.G * dt * dt; b.vy -= R.G * dt;
+      if (hitsFlag(b, 1 - team)) return true;
+      if (ballCollide(b, null)) return false;
+    }
+    return false;
+  }
+
+  function finishVT(m, winner) {
+    m.winner = winner;
+    m.decidedBy = 'vt';
+    m.phase = 'setOver';
+    m.phaseTime = R.SET_OVER;
+    m.events.push({ type: 'vtEnd', winner });
   }
 
   /** 退場したら、操作を残っている仲間に移す (フォワード優先、近い順) */
@@ -701,11 +892,13 @@
       m.phaseTime -= dt;
       stepBalls(m, dt);
       if (m.phaseTime <= 0) {
-        if (m.winner != null) { m.phase = 'matchOver'; m.events.push({ type: 'matchEnd', winner: m.winner }); }
+        if (m.winner != null) { m.phase = 'matchOver'; m.events.push({ type: 'matchEnd', winner: m.winner, by: m.decidedBy }); }
+        else if (m.goVT) { m.goVT = false; startVT(m); }
         else startSet(m);
       }
       return m;
     }
+    if (m.phase === 'vt') { stepVT(m, dt, input); return m; }
     if (m.phase !== 'play') return m;
 
     m.time -= dt;
@@ -739,6 +932,6 @@
     createMatch, startSet, step, drainEvents,
     launch, trajectory, predictHit, findAim, throwBall, ballCollide, playerHeight,
     movePlayer, pushOutOfShelters, limits, aliveCount, steer, blockingShelter,
-    aiInput, threatOf
+    aiInput, threatOf, inEnemyCourt, enemyCourtCount, setPoints, startVT, hitsFlag, predictVT
   };
 });

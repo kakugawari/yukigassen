@@ -100,6 +100,31 @@ button { font: inherit; color: inherit; cursor: pointer; }
   text-shadow: 0 1px 0 #fff;
 }
 .stock-label { font-size: 10px; color: #5b6b85; font-weight: 700; }
+.pts { font-size: 11px; font-weight: 800; color: #5b6b85; font-variant-numeric: tabular-nums; }
+.in-enemy {
+  font-size: 11px; font-weight: 800; color: #5b6b85;
+  background: rgba(255, 255, 255, .75); border-radius: 8px; padding: 1px 8px;
+  font-variant-numeric: tabular-nums;
+}
+.in-enemy.full { color: #fff; background: var(--red); }
+.warn {
+  position: absolute;
+  left: 50%;
+  bottom: calc(env(safe-area-inset-bottom) + 210px);
+  transform: translateX(-50%);
+  width: max-content;
+  max-width: 400px;
+  padding: 8px 16px;
+  border-radius: 12px;
+  background: var(--red);
+  color: #fff;
+  font-size: 14px;
+  font-weight: 800;
+  box-shadow: 0 4px 14px rgba(160, 30, 20, .35);
+  pointer-events: none;
+}
+.sets-list .total { background: #eef4fb; }
+.sets-list .by { background: transparent; color: #5b6b85; font-size: 13px; }
 #stockBlue { color: var(--blue); }
 #stockRed { color: var(--red); }
 .pause {
@@ -306,3 +331,8 @@ h2 { margin: 0; font-size: 30px; }
 
 body:has(#vTitle:not([hidden])) .hud,
 body:has(#vTitle:not([hidden])) .controls { visibility: hidden; }
+
+/* ビクトリースロー中は、投げる操作だけ */
+#game.vt-mode .stock,
+#game.vt-mode .btn-crouch,
+#game.vt-mode .stick-zone { visibility: hidden; }

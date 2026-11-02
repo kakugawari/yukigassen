@@ -14,6 +14,7 @@
     canvas: $('view'), game: $('game'),
     setsBlue: $('setsBlue'), setsRed: $('setsRed'), aliveBlue: $('aliveBlue'), aliveRed: $('aliveRed'),
     setNo: $('setNo'), time: $('time'), stockBlue: $('stockBlue'), stockRed: $('stockRed'),
+    ptsBlue: $('ptsBlue'), ptsRed: $('ptsRed'), inEnemy: $('inEnemy'), warn: $('warn'),
     stickZone: $('stickZone'), stick: $('stick'), knob: $('knob'), moveHint: $('moveHint'),
     btnCrouch: $('btnCrouch'), makeRing: $('makeRing'), throwPad: $('throwPad'), myBalls: $('myBalls'),
     banner: $('banner'),
@@ -86,7 +87,13 @@
     line(R.HALF_W * 2 + 0.12, 0.12, 0, -R.HALF_L);
     line(0.12, R.HALF_L * 2, R.HALF_W, 0);
     line(0.12, R.HALF_L * 2, -R.HALF_W, 0);
-    line(R.HALF_W * 2, 0.16, 0, 0, new T.MeshBasicMaterial({ color: 0xe86a62 }));
+    app.centerLine = new T.MeshBasicMaterial({ color: 0xe86a62 });
+    line(R.HALF_W * 2, 0.16, 0, 0, app.centerLine);
+    // バックライン: フォワードはここより後ろへ下がれない
+    const backMat = new T.MeshBasicMaterial({ color: 0x8fb6dc });
+    for (const sgn of [1, -1]) {
+      for (let x = -R.HALF_W + 0.25; x < R.HALF_W; x += 0.9) line(0.5, 0.1, x, sgn * R.BACK_LINE_U, backMat);
+    }
 
     // シェルター (空気で膨らませた白い壁。チームの色の帯つき)
     for (const s of C.SHELTERS) {
@@ -337,6 +344,15 @@
     aimLine.visible = true;
     aimRing.visible = true;
     aimRing.position.set(tr.end.x, Math.max(0.03, tr.end.y), tr.end.z);
+    if (app.match.phase === 'vt') {
+      // ビクトリースロー: フラッグに当たるコースなら赤
+      const hit = C.predictVT(p.team, p.x, p.z, t.x, t.z);
+      const col = hit ? 0xff3b30 : tr.hit === 'shelter' ? 0x9aa6b8 : 0xffb020;
+      aimRing.material.color.setHex(col); aimLine.material.color.setHex(col);
+      const f = C.flagPos(1 - p.team);
+      lockRing.visible = hit; lockRing.position.set(f.x, 0.03, f.z);
+      return;
+    }
     // いまの位置のままなら当たる相手がいれば赤く (動かれると外れる)
     const victim = C.predictHit(app.match.players, p.team, p.x, p.z, t.x, t.z);
     const col = victim ? 0xff3b30 : tr.hit === 'shelter' ? 0x9aa6b8 : 0xffb020;
@@ -552,7 +568,8 @@
     app.bannerT = sec || 1.6;
   }
 
-  const REASON = { flag: 'フラッグ奪取!', allout: '全員退場', time: '時間切れ' };
+  const REASON = { flag: 'フラッグ奪取!', allout: '全員アウト', time: '時間切れ', over: '敵陣に4人目 (反則)' };
+  const DECIDED = { sets: 'セット数', points: 'ポイント合計', vt: 'ビクトリースロー' };
 
   function handleEvents() {
     const m = app.match;
@@ -595,15 +612,45 @@
         case 'setEnd': {
           sound.whistle(true);
           const who = e.winner === 0 ? 'あおの勝ち' : e.winner === 1 ? 'あかの勝ち' : '引き分け';
-          showBanner(`${REASON[e.reason]}<small>SET ${e.setNo} ${who}</small>`, e.winner === 0 ? 'blue' : e.winner === 1 ? 'red' : '', R.SET_OVER);
+          showBanner(`${REASON[e.reason]}<small>SET ${e.setNo} ${who} ・ ${e.points[0]} - ${e.points[1]} pt</small>`, e.winner === 0 ? 'blue' : e.winner === 1 ? 'red' : '', R.SET_OVER);
           app.aim = null; els.throwPad.classList.remove('on');
           break;
         }
         case 'matchEnd':
           showResult();
           break;
+        case 'vtStart':
+          resetPlayers();
+          for (let i = 0; i < m.players.length; i++) if (!m.players[i].alive) views.players[i].outT = 99;
+          snapCamera();
+          showBanner('ビクトリースロー<small>セットもポイントも同点。相手のフラッグに当てろ</small>', '', 2.4);
+          sound.whistle(true);
+          break;
+        case 'vtThrow': {
+          if (e.hit) { puff(e.x, e.y, e.z, 16, 1.2); sound.hit(); }
+          else sound.splat(false);
+          const mineTurn = e.team === 0;
+          showBanner(`${e.hit ? '命中!' : 'はずれ'}<small>${mineTurn ? 'あお' : 'あか'} ${e.round}本目 ・ ${vtTally()}</small>`,
+            e.hit ? (mineTurn ? 'blue' : 'red') : '', 1.0);
+          break;
+        }
+        case 'vtRound':
+          showBanner(`${e.round}本目<small>${vtTally()}</small>`, '', 1.0);
+          break;
+        case 'vtEnd':
+          sound.whistle(true);
+          showBanner(`${e.winner === 0 ? 'あお' : 'あか'}の勝ち<small>ビクトリースロー ${vtTally()}</small>`, e.winner === 0 ? 'blue' : 'red', R.SET_OVER);
+          break;
       }
     }
+  }
+
+  /** ビクトリースローの当たり外れ: ●=命中 ○=はずれ */
+  function vtTally() {
+    const vt = app.match && app.match.vt;
+    if (!vt) return '';
+    const row = (h) => h.map((x) => (x ? '●' : '○')).join('');
+    return `あお ${row(vt.hits[0]) || '-'} / あか ${row(vt.hits[1]) || '-'}`;
   }
 
   function showResult() {
@@ -611,25 +658,38 @@
     app.running = false;
     els.resultTitle.textContent = m.winner === 0 ? '勝利!' : m.winner === 1 ? '負け…' : '引き分け';
     els.resultTitle.style.color = m.winner === 0 ? 'var(--blue)' : m.winner === 1 ? 'var(--red)' : '';
-    els.resultSets.innerHTML = m.setResults.map((r, i) => {
+    const rows = m.setResults.map((r, i) => {
       const who = r.winner === 0 ? 'あお' : r.winner === 1 ? 'あか' : '引き分け';
-      return `<li class="w${r.winner}">SET ${i + 1}: ${who} ・ ${REASON[r.reason]} (残り ${r.alive[0]} 対 ${r.alive[1]})</li>`;
-    }).join('');
+      return `<li class="w${r.winner}">SET ${i + 1}: ${who} ・ ${REASON[r.reason]} <b>${r.points[0]} - ${r.points[1]}</b></li>`;
+    });
+    rows.push(`<li class="total">セット ${m.setWins[0]} - ${m.setWins[1]} ・ ポイント ${m.points[0]} - ${m.points[1]}</li>`);
+    if (m.vt) rows.push(`<li class="total">ビクトリースロー ${vtTally()}</li>`);
+    if (m.decidedBy) rows.push(`<li class="by">${DECIDED[m.decidedBy]}で決着</li>`);
+    els.resultSets.innerHTML = rows.join('');
     els.vResult.hidden = false;
     if (m.winner === 0) sound.win();
   }
 
   // ------------------------------------------------------------ 描く
+  /** カメラが追う選手。ビクトリースローでは、いま投げる番の選手 */
+  function camSubject() {
+    const m = app.match;
+    if (m && m.phase === 'vt' && m.vt) return m.players[m.vt.ids[m.vt.turn]];
+    return me();
+  }
+
   function snapCamera() {
-    const p = me();
+    const p = camSubject();
     const target = camTarget(p);
     camPos.copy(target.pos); camLook.copy(target.look);
   }
 
   function camTarget(p) {
     const x = p ? p.x * 0.35 : 0;
-    const z = p ? clampN(p.z, -16, 17) : 12;
-    return { pos: new T.Vector3(x, 21, z + 10), look: new T.Vector3(x, 0, z - 5) };
+    // あかの選手を追うとき (ビクトリースローのあかの番) は、反対側から見る
+    const f = p && p.team === 1 && app.match && app.match.phase === 'vt' ? -1 : 1;
+    const z = p ? (f > 0 ? clampN(p.z, -16, 17) : clampN(p.z, -17, 16)) : 12;
+    return { pos: new T.Vector3(x, 21, z + 10 * f), look: new T.Vector3(x, 0, z - 5 * f) };
   }
   function clampN(v, a, b) { return v < a ? a : v > b ? b : v; }
 
@@ -709,7 +769,7 @@
       } else { meRing.visible = false; meArrow.visible = false; }
 
       // カメラ: 自分を追う (斜め上から)
-      const target = camTarget(mine && mine.alive ? mine : mine);
+      const target = camTarget(camSubject());
       const k = Math.min(1, dt * 5);
       camPos.lerp(target.pos, k);
       camLook.lerp(target.look, k);
@@ -772,8 +832,30 @@
     const a0 = C.aliveCount(m, 0), a1 = C.aliveCount(m, 1);
     setHTML('ab', els.aliveBlue, aliveDots(a0));
     setHTML('ar', els.aliveRed, aliveDots(a1));
-    setText('stb', els.stockBlue, String(m.stock[0]));
-    setText('str', els.stockRed, String(m.stock[1]));
+    setText('stb', els.stockBlue, `雪玉 ${m.stock[0]}`);
+    setText('str', els.stockRed, `雪玉 ${m.stock[1]}`);
+    setText('pb', els.ptsBlue, `${m.points[0]}pt`);
+    setText('pr', els.ptsRed, `${m.points[1]}pt`);
+    // ビクトリースロー: 時計の所を VT にし、使わない表示と操作を隠す
+    const vtMode = !!m.vt;
+    if (app.hud.vt !== vtMode) { app.hud.vt = vtMode; els.game.classList.toggle('vt-mode', vtMode); }
+    if (vtMode) {
+      setText('time', els.time, 'VT');
+      setText('setNo', els.setNo, `${m.vt.round}本目`);
+    }
+    // 相手コートに入っているあおの人数 (3 人まで。4 人目で反則負け)
+    const inE = m.players.filter((q) => q.team === 0 && C.inEnemyCourt(q)).length;
+    setText('ie', els.inEnemy, `敵陣 ${inE}/${R.MAX_IN_ENEMY}`);
+    const full = inE >= R.MAX_IN_ENEMY;
+    if (app.hud.full !== full) { app.hud.full = full; els.inEnemy.classList.toggle('full', full); }
+    // 自分が 4 人目になりそうなら知らせる
+    const me0 = me();
+    const danger = !!(m.phase === 'play' && me0 && me0.alive && !C.inEnemyCourt(me0) && full && C.side(me0.team) * me0.z < 3);
+    if (app.hud.danger !== danger) {
+      app.hud.danger = danger;
+      els.warn.hidden = !danger;
+      app.centerLine.color.setHex(danger ? 0xff2a1a : 0xe86a62);
+    }
     const p = me();
     const balls = p ? p.balls : 0;
     let bh = '';

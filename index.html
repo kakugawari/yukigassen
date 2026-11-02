@@ -19,7 +19,7 @@
   <div class="hud" id="hud">
     <div class="score">
       <div class="team blue">
-        <span class="tname">あお</span>
+        <span class="tname">あお <span class="pts" id="ptsBlue">0pt</span></span>
         <span class="sets" id="setsBlue"></span>
         <span class="alive" id="aliveBlue"></span>
       </div>
@@ -28,12 +28,12 @@
         <span class="time" id="time">1:30</span>
       </div>
       <div class="team red">
-        <span class="tname">あか</span>
+        <span class="tname"><span class="pts" id="ptsRed">0pt</span> あか</span>
         <span class="sets" id="setsRed"></span>
         <span class="alive" id="aliveRed"></span>
       </div>
     </div>
-    <div class="stock"><span id="stockBlue">69</span><span class="stock-label">のこり雪玉</span><span id="stockRed">69</span></div>
+    <div class="stock"><span id="stockBlue">雪玉 69</span><span class="in-enemy" id="inEnemy">敵陣 0/3</span><span id="stockRed">雪玉 69</span></div>
     <button type="button" class="pause" id="btnPause" aria-label="一時停止">Ⅱ</button>
   </div>
 
@@ -54,6 +54,7 @@
   </div>
 
   <div class="banner" id="banner" hidden></div>
+  <div class="warn" id="warn" hidden>敵陣はもう3人。<b>入ると反則負け</b></div>
 
   <!-- タイトル -->
   <section class="screen" id="vTitle">
@@ -69,10 +70,12 @@
       <details class="rules">
         <summary>あそびかた・ルール</summary>
         <ul>
-          <li><b>勝ち方</b>(1セット 90秒): 相手の<b>フラッグを取る</b> / 相手を<b>全員退場</b>させる / 時間切れで<b>残り人数が多い</b></li>
-          <li>雪玉に当たったら<b>退場</b>。地面やシェルターに当たった玉は無効</li>
-          <li>あなたは<b>フォワード</b>(黄色の輪)。退場したら仲間に交代</li>
-          <li><b>バック</b>(白帯)は自陣から出られない</li>
+          <li><b>セットの勝ち</b>(1セット 90秒): 相手の<b>フラッグを抜く</b> / 相手を<b>全員アウト</b>にする(どちらも10ポイント) / 時間切れは<b>コートに残った人数</b>がポイント</li>
+          <li><b>2セット先取</b>。セット数が同じなら<b>ポイント合計</b>、それも同じなら<b>ビクトリースロー</b>(相手のフラッグに交互に投げる)</li>
+          <li>雪玉に当たったら<b>アウト</b>。地面やシェルターに当たった玉は無効</li>
+          <li>あなたは<b>フォワード</b>(黄色の輪)。アウトになったら仲間に交代</li>
+          <li><b>相手コートに入れるのは3人まで</b>。4人目が入るとそのセットは負け(上の「敵陣 n/3」)</li>
+          <li>フォワードは自陣の<b>バックライン</b>(点線)より後ろへ下がれない。バックス(白帯)はフラッグの守り</li>
           <li>雪玉はチームで<b>1セット90個</b>。しゃがむと1個ずつ丸める(最大5個)</li>
           <li>シェルターの陰で<b>しゃがめば</b>当たらない。投げた直後は頭が出る</li>
         </ul>

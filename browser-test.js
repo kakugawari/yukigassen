@@ -270,6 +270,84 @@ async function run() {
     const t3 = await phone.evaluate(() => window.__app.match().time);
     ok(t3 < t2, 'つづけると再開する');
 
+    // ---- 相手コートは 3 人まで
+    section('相手コートは 3 人まで');
+    const crowd = await phone.evaluate(async () => {
+      const m = window.__app.match();
+      const me = window.__app.me();
+      // あかを動かないようにし、あおの AI 3 人を相手コートへ
+      m.players.filter((p) => p.team === 1).forEach((p) => { p.balls = 0; p.ai.think = 999; p.ai.goal = null; });
+      const mates = m.players.filter((p) => p.team === 0 && p.alive && p !== me);
+      mates.slice(0, 3).forEach((p, i) => { p.x = -4 + i * 1.6; p.z = -2; p.ai.think = 999; p.ai.goal = { x: p.x, z: -2 }; p.balls = 0; });
+      mates.slice(3).forEach((p) => { p.ai.think = 999; p.ai.goal = null; });
+      me.x = 4.3; me.z = 1.5;
+      await new Promise((r) => setTimeout(r, 300));
+      return {
+        badge: document.getElementById('inEnemy').textContent,
+        full: document.getElementById('inEnemy').classList.contains('full'),
+        warn: !document.getElementById('warn').hidden
+      };
+    });
+    ok(crowd.badge === '敵陣 3/3' && crowd.full, `敵陣の人数が出る (${crowd.badge})`);
+    ok(crowd.warn, '3 人入っているときにセンターラインへ近づくと、反則の注意が出る');
+    // 自分が 4 人目として入る (左側をなぞって前へ)
+    await phone.mouse.move(100, 780);
+    await phone.mouse.down();
+    await phone.mouse.move(100, 700, { steps: 4 });
+    await phone.waitForFunction(() => window.__app.match().phase !== 'play', null, { timeout: 8000 }).catch(() => {});
+    await phone.mouse.up();
+    const foul = await phone.evaluate(() => ({ r: window.__app.match().setResults.slice(-1)[0], ban: document.getElementById('banner').textContent }));
+    ok(foul.r && foul.r.reason === 'over' && foul.r.winner === 1, `4 人目が入るとセット負け (${foul.ban})`);
+    await phone.waitForFunction(() => window.__app.match().phase === 'play', null, { timeout: 10000 });
+
+    // ---- ビクトリースロー
+    section('ビクトリースロー');
+    await phone.evaluate(() => { window.Core.startVT(window.__app.match()); });
+    await phone.waitForTimeout(200);
+    const vt0 = await phone.evaluate(() => {
+      const m = window.__app.match();
+      return { phase: m.phase, alive: m.players.filter((p) => p.alive).length, me: window.__app.me().id === m.vt.ids[0], ban: document.getElementById('banner').textContent, time: document.getElementById('time').textContent };
+    });
+    ok(vt0.phase === 'vt' && vt0.alive === 2 && vt0.me, `投げる 2 人だけが残り、自分が投げる (${vt0.ban})`);
+    ok(vt0.time === 'VT', '時計の所が VT になる');
+    const vtHide = await phone.evaluate(() => ['.stock', '#btnCrouch', '#stickZone'].map((q) => getComputedStyle(document.querySelector(q)).visibility));
+    ok(vtHide.every((v) => v === 'hidden'), `VT では使わない表示と操作を隠す (${vtHide.join(',')})`);
+    // フラッグに当たる着地点を、投げるボタンのスライドで狙う
+    await phone.waitForFunction(() => window.__app.match().vt.wait <= 0, null, { timeout: 5000 });
+    const drag = await phone.evaluate(() => {
+      const C = window.Core, me = window.__app.me(), f = C.flagPos(1);
+      const aim = C.findAim([], 0, me.x, me.z, { team: 1, crouch: false, standT: 0 }, f.x, f.z);
+      const k = C.R.RANGE / 140;   // app.js の aimMax
+      return { dx: (aim.x - me.x) / k, dy: (aim.z - me.z) / k };
+    });
+    const pad2 = await center('#throwPad');
+    await phone.mouse.move(pad2.x, pad2.y);
+    await phone.mouse.down();
+    await phone.mouse.move(pad2.x + drag.dx, pad2.y + drag.dy, { steps: 6 });
+    await phone.waitForTimeout(120);
+    await phone.mouse.up();
+    await phone.waitForFunction(() => window.__app.match().vt.hits[0].length === 1, null, { timeout: 8000 }).catch(() => {});
+    const vt1 = await phone.evaluate(() => window.__app.match().vt.hits[0]);
+    ok(vt1.length === 1 && vt1[0] === true, `狙ってスライドして投げると、フラッグに当たる (${JSON.stringify(vt1)})`);
+    await phone.waitForFunction(() => window.__app.match().vt.hits[1].length >= 1 || window.__app.match().phase !== 'vt', null, { timeout: 10000 }).catch(() => {});
+    const vt2 = await phone.evaluate(() => ({ phase: window.__app.match().phase, hits: window.__app.match().vt.hits }));
+    ok(vt2.hits[1].length >= 1, `あかも投げる (${JSON.stringify(vt2.hits)})`);
+    await phone.waitForFunction(() => !document.getElementById('vResult').hidden, null, { timeout: 60000 }).catch(() => {});
+    // 勝負がつかない回は自分も投げ続ける必要があるので、つくまで当て続ける
+    for (let i = 0; i < 9 && (await phone.evaluate(() => document.getElementById('vResult').hidden)); i++) {
+      await phone.evaluate(() => {
+        const C = window.Core, me = window.__app.me(), f = C.flagPos(1);
+        window.__app.app.input.throwAt = C.findAim([], 0, me.x, me.z, { team: 1, crouch: false, standT: 0 }, f.x, f.z);
+      });
+      await phone.waitForTimeout(3000);
+    }
+    const vtRes = await phone.evaluate(() => ({ hidden: document.getElementById('vResult').hidden, text: document.getElementById('resultSets').textContent, by: window.__app.match().decidedBy }));
+    ok(!vtRes.hidden && vtRes.by === 'vt' && vtRes.text.includes('ビクトリースロー'), `ビクトリースローで決着し、結果に出る (${vtRes.text.slice(-40)})`);
+    await phone.click('#btnAgain');
+    await phone.waitForFunction(() => window.__app.match().phase === 'play', null, { timeout: 10000 });
+    const back = await phone.evaluate(() => getComputedStyle(document.querySelector('#btnCrouch')).visibility);
+    ok(back === 'visible', '次の試合では操作が戻る');
+
     // ---- 試合の終わり
     section('試合の終わり');
     await phone.evaluate(() => {
@@ -285,11 +363,13 @@ async function run() {
       const r = b.getBoundingClientRect();
       return { hidden: b.hidden, text: b.textContent, w: r.width, h: r.height };
     });
-    ok(!ban.hidden && ban.text.includes('全員退場'), `セットの結果が出る (${ban.text})`);
+    ok(!ban.hidden && ban.text.includes('全員アウト') && ban.text.includes('10 - 0 pt'), `セットの結果とポイントが出る (${ban.text})`);
     ok(ban.w > ban.h * 1.5, `帯が縦に潰れない (${Math.round(ban.w)}x${Math.round(ban.h)})`);
     await phone.waitForFunction(() => !document.getElementById('vResult').hidden, null, { timeout: 10000 });
     const res = await phone.evaluate(() => ({ t: document.getElementById('resultTitle').textContent, n: document.querySelectorAll('#resultSets li').length }));
-    ok(res.t.includes('勝利'), `2 セット取ると試合終了の画面 (${res.t}, ${res.n} セット)`);
+    ok(res.t.includes('勝利'), `2 セット取ると試合終了の画面 (${res.t}, ${res.n} 行)`);
+    const totals = await phone.evaluate(() => document.getElementById('resultSets').textContent);
+    ok(/ポイント \d+ - \d+/.test(totals) && totals.includes('セット数で決着'), `結果にポイント合計と決め手が出る`);
     await phone.click('#btnAgain');
     await phone.waitForTimeout(150);
     const again = await phone.evaluate(() => ({ hidden: document.getElementById('vResult').hidden, set: window.__app.match().setNo, wins: window.__app.match().setWins.join('-') }));

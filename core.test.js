@@ -216,6 +216,57 @@ test('ビクトリースローの照準: 当たる着地点は当たり、横へ
   assert.ok(!C.predictVT(0, x, z, aim.x + 1.5, aim.z));
 });
 
+test('狙いの補助: はじいた向きの相手を選ぶ。40° 以内にいなければ選ばない', () => {
+  const m = playing({ human: 1 });
+  const me = m.players[1];
+  me.x = 0; me.z = 6;
+  const reds = m.players.filter((p) => p.team === 1);
+  reds.forEach((p) => { p.alive = false; });
+  const L = reds[0], Rt = reds[1];
+  L.alive = Rt.alive = true;
+  L.x = -3.5; L.z = -3; Rt.x = 3.5; Rt.z = -3;
+  assert.strictEqual(C.pickTarget(m, me, { x: 0.4, z: -0.7 }).id, Rt.id);
+  assert.strictEqual(C.pickTarget(m, me, { x: -0.4, z: -0.7 }).id, L.id);
+  assert.strictEqual(C.pickTarget(m, me, { x: 0, z: 1 }), null, '真後ろにはいない');
+  assert.ok(C.pickTarget(m, me, null), 'はじかなければ前方のだれか');
+});
+
+test('狙いの補助: 走っている相手にも、壁の陰に立つ相手にも当たる', () => {
+  // 走っている相手 (横へ 4.3m/s): 先読みして当たる
+  let hits = 0;
+  for (let k = 0; k < 10; k++) {
+    const m = playing({ human: 1 });
+    const me = m.players[1];
+    isolate(m, [1, 7]);
+    const q = m.players[7];
+    me.x = 0; me.z = 8; me.balls = 1;
+    q.x = -3 + k * 0.4; q.z = -4 + (k % 3);
+    q.ai.think = 999; q.ai.seen = new Proxy({}, { get: () => true });   // よけない
+    const dir = k % 2 ? 1 : -1;
+    q.vx = dir * R.SPEED; q.vz = 0;
+    const aim = C.assistAim(m, me, null, q);
+    C.throwBall(m, me, aim.x, aim.z);
+    for (let i = 0; i < 120 && q.alive; i++) {
+      q.x += dir * R.SPEED / 60; q.vx = dir * R.SPEED;   // まっすぐ走り続ける
+      C.step(m, 1 / 60, { crouch: true });
+    }
+    if (!q.alive) hits++;
+  }
+  assert.ok(hits >= 9, `走る相手に ${hits}/10`);
+  // 中央シェルターの陰に立っている相手: 足もとは壁に止まるので、奥へ落として頭越しに
+  const m = playing({ human: 1 });
+  isolate(m, [1, 7]);
+  const me = m.players[1], q = m.players[7];
+  me.x = 0.5; me.z = 9; me.balls = 1;
+  q.x = 0.3; q.z = -0.55; q.vx = q.vz = 0; q.ai.think = 999; q.ai.seen = new Proxy({}, { get: () => true });
+  const aim = C.assistAim(m, me, null, q);
+  assert.ok(aim.clear, '当たるコースが見つかる');
+  assert.ok(aim.z < q.z - 1, `相手より奥へ落とす (着地 z=${aim.z.toFixed(2)})`);
+  C.throwBall(m, me, aim.x, aim.z);
+  run(m, 1.2, { crouch: true });
+  assert.ok(!q.alive, '頭越しに当たる');
+});
+
 test('フラッグはバックスが抜いてもよい', () => {
   const m = playing({ human: null });
   m.players.forEach((p) => { p.balls = 0; });

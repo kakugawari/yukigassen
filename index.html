@@ -2,33 +2,108 @@
 <html lang="ja">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<title>アプリの雛形</title>
-<meta name="description" content="ビルドなしで動くアプリの雛形">
-<meta name="theme-color" content="#151a2e">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+<title>雪合戦 フラッグ7</title>
+<meta name="description" content="7対7のスポーツ雪合戦。雪玉を狙って投げ、敵陣のフラッグを奪う">
+<meta name="theme-color" content="#cfe3f5">
+<meta name="apple-mobile-web-app-capable" content="yes">
 <link rel="icon" href="./icon.svg" type="image/svg+xml">
 <link rel="stylesheet" href="./styles.css">
 </head>
 <body>
 
-<div id="app">
-  <header id="topbar">
-    <h1 class="title">アプリの雛形</h1>
-    <div class="topbar-actions">
-      <button type="button" id="btnAction" class="btn btn-primary">ためす</button>
-    </div>
-  </header>
+<div id="game">
+  <canvas id="view"></canvas>
 
-  <main id="stage">
-    <p class="lead">ここにアプリを作る。</p>
-    <p class="result" id="result">—</p>
-    <p class="note">
-      ロジックは <code>src/core.js</code> に、画面は <code>src/app.js</code> に書く。<br>
-      <code>npm test</code> でロジックを、<code>npm run test:ui</code> で画面を確かめる。
-    </p>
-  </main>
+  <!-- 上の表示 -->
+  <div class="hud" id="hud">
+    <div class="score">
+      <div class="team blue">
+        <span class="tname">あお</span>
+        <span class="sets" id="setsBlue"></span>
+        <span class="alive" id="aliveBlue"></span>
+      </div>
+      <div class="clock">
+        <span class="setno" id="setNo">SET 1</span>
+        <span class="time" id="time">1:30</span>
+      </div>
+      <div class="team red">
+        <span class="tname">あか</span>
+        <span class="sets" id="setsRed"></span>
+        <span class="alive" id="aliveRed"></span>
+      </div>
+    </div>
+    <div class="stock"><span id="stockBlue">69</span><span class="stock-label">のこり雪玉</span><span id="stockRed">69</span></div>
+    <button type="button" class="pause" id="btnPause" aria-label="一時停止">Ⅱ</button>
+  </div>
+
+  <!-- 操作 -->
+  <div class="controls" id="controls">
+    <div class="stick-zone" id="stickZone">
+      <div class="stick" id="stick"><div class="knob" id="knob"></div></div>
+      <div class="hint" id="moveHint">ここをなぞって移動</div>
+    </div>
+    <button type="button" class="btn-crouch" id="btnCrouch">
+      <span class="ring" id="makeRing"></span>
+      <span class="label">しゃがむ<br><small>丸める</small></span>
+    </button>
+    <div class="throw" id="throwPad">
+      <div class="balls" id="myBalls"></div>
+      <span class="label">投げる<br><small>スライドで狙う</small></span>
+    </div>
+  </div>
+
+  <div class="banner" id="banner" hidden></div>
+
+  <!-- タイトル -->
+  <section class="screen" id="vTitle">
+    <div class="title-card">
+      <h1><span>雪合戦</span><b>フラッグ7</b></h1>
+      <p class="tag">7対7 ・ 2セット先取 ・ 当たったら退場</p>
+      <div class="diff" role="group" aria-label="相手の強さ">
+        <button type="button" data-diff="0.15">かんたん</button>
+        <button type="button" data-diff="0.5" class="on">ふつう</button>
+        <button type="button" data-diff="0.85">つよい</button>
+      </div>
+      <button type="button" class="btn-start" id="btnStart">試合開始</button>
+      <details class="rules">
+        <summary>あそびかた・ルール</summary>
+        <ul>
+          <li><b>勝ち方</b>(1セット 90秒): 相手の<b>フラッグを取る</b> / 相手を<b>全員退場</b>させる / 時間切れで<b>残り人数が多い</b></li>
+          <li>雪玉に当たったら<b>退場</b>。地面やシェルターに当たった玉は無効</li>
+          <li>あなたは<b>フォワード</b>(黄色の輪)。退場したら仲間に交代</li>
+          <li><b>バック</b>(白帯)は自陣から出られない</li>
+          <li>雪玉はチームで<b>1セット90個</b>。しゃがむと1個ずつ丸める(最大5個)</li>
+          <li>シェルターの陰で<b>しゃがめば</b>当たらない。投げた直後は頭が出る</li>
+        </ul>
+        <p class="how">左側をなぞって移動。右下の<b>投げる</b>を押したまま投げたい方へスライドすると狙いが出て、離すと投げる(タップだと近くの相手へ)。狙いの輪が<b>赤</b>なら当たるコース。灰色は壁に当たる。壁の陰の相手は、<b>奥へ落とすと頭越しに</b>当たる。</p>
+      </details>
+    </div>
+  </section>
+
+  <!-- 一時停止 -->
+  <section class="screen" id="vPause" hidden>
+    <div class="card">
+      <h2>一時停止</h2>
+      <button type="button" class="btn-start" id="btnResume">つづける</button>
+      <button type="button" class="btn-sub" id="btnQuit">タイトルへ</button>
+    </div>
+  </section>
+
+  <!-- 試合結果 -->
+  <section class="screen" id="vResult" hidden>
+    <div class="card">
+      <h2 id="resultTitle">勝利!</h2>
+      <ol class="sets-list" id="resultSets"></ol>
+      <button type="button" class="btn-start" id="btnAgain">もう一度</button>
+      <button type="button" class="btn-sub" id="btnToTitle">タイトルへ</button>
+    </div>
+  </section>
+
+  <div class="ver" id="ver"></div>
 </div>
 
+<script src="./three.min.js"></script>
 <script src="./core.js"></script>
 <script src="./app.js"></script>
 </body>

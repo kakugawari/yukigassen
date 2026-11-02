@@ -1,5 +1,8 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512" role="img" aria-label="アプリの雛形">
-  <rect width="512" height="512" rx="108" fill="#151a2e"/>
-  <rect x="96" y="96" width="200" height="200" rx="28" fill="#4cc9f0"/>
-  <rect x="216" y="216" width="200" height="200" rx="28" fill="#ffd166"/>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512" role="img" aria-label="雪合戦 フラッグ7">
+  <rect width="512" height="512" rx="108" fill="#bcd8f0"/>
+  <rect x="300" y="90" width="16" height="300" rx="8" fill="#5b6575"/>
+  <path d="M316 100 L430 140 L316 180 Z" fill="#e0413a"/>
+  <circle cx="200" cy="300" r="120" fill="#ffffff"/>
+  <circle cx="170" cy="270" r="30" fill="#e6f1fb"/>
+  <circle cx="240" cy="345" r="22" fill="#d7e8f7"/>
 </svg>

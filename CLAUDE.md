@@ -62,6 +62,7 @@ core.js                   ロジック (ルール・玉・AI)。DOM を触らな
 app.js                    操作・描画 (three.js)・音
 three.min.js              three.js r160 (MIT)。手を入れない
 bundle.js                 テストプレイ用に 1 枚の HTML へまとめる
+ASSETS.md                 画像に置き換える物の一覧 (大きさ・形式・背景の抜き方)
 core.test.js              ロジックのテスト (node --test)
 browser-test.js           ブラウザで動かすテスト
 serve.js                  開発用サーバー

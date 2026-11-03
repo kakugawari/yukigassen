@@ -18,13 +18,65 @@
 
 ---
 
-## 毎回つける共通の指示
+## 指示文 (1 回ぶんを、コードブロック 1 つにまとめてある)
 
-1〜3 回目の頭に、毎回これを付ける。
+それぞれ**ブロックをまるごとコピーして貼るだけ**でよい。1〜3 回目は、0 回目で採った設定画を**参考画像として添えて**送る。
+
+### 0 回目: 設定画 (前・後ろ・横で立つ 3 体)
+
+気に入るまで何度でも作り直す。ここで顔・体形・色が決まる。
+
+```text
+Character design sheet for a mobile snowball-fight game.
+Three views of the SAME character side by side in one image, in three equal cells in one row:
+left = front view, middle = back view, right = side view facing right.
+Standing relaxed, arms slightly away from the body, holding nothing.
+
+Character: a cheerful chibi athlete, about 2.5 heads tall, playing team "snowball fight" sport.
+Outfit: puffy winter jacket in royal blue (#2f6fe0) with darker blue (#1d4fb0) side panels,
+dark navy snow pants, chunky dark boots, light grey gloves,
+a rounded sports helmet in dark blue (#1d4fb0) with small ski goggles pushed up on the front.
+No numbers, no letters, no logos anywhere.
+
+Style: soft toy-like 3D render (like a vinyl figure), clean shapes, gentle cel shading,
+light coming from the upper left, thin darker outline. Bright and friendly.
+
+Camera: HIGH ANGLE, looking DOWN at the character from about 55 degrees above
+(like an isometric strategy game camera). Full body visible, feet included.
+Orthographic look, no perspective distortion.
+
+Layout: three equal cells in one row, wide empty gap between them, nothing touches a cell border.
+All three are the same size with feet on the same baseline.
+
+Background: fully TRANSPARENT (real alpha channel, PNG). Do not draw a checkerboard.
+If transparency is impossible, use a flat solid pure green (#00FF00) background with no gradient,
+and do not use any green in the character.
+No shadow on the ground, no snow, no effects, no text labels.
+```
+
+### 1 回目: 背中側 (カメラから遠ざかる向き) 8 ポーズ
 
 ```text
 Game sprite sheet for a mobile snowball-fight game.
-One character, the SAME character in every cell (same face, same outfit, same proportions, same scale).
+One character, the SAME character in all 8 cells (same face, same outfit, same proportions, same scale).
+Use the attached character design exactly.
+
+BACK VIEW: the character faces AWAY from the camera (we see the back of the jacket and helmet),
+seen from high above at about 55 degrees.
+The character throws with the RIGHT hand, toward the top of the image (away from the camera).
+
+Cells, left to right, top row then bottom row:
+1. Idle: standing, relaxed, a snowball held in the right hand at the waist.
+2. Run A: running away from the camera, left foot forward, right arm forward.
+3. Run B: running, both feet passing under the body, slightly up in the air.
+4. Run C: running, right foot forward, left arm forward.
+5. Crouch: squatting very low behind cover, knees fully bent, head ducked, body compact.
+   Total height must be HALF of the idle pose.
+6. Making a snowball: same low squat as cell 5, both hands together in front, packing snow.
+7. Wind-up: right arm pulled far back behind the head holding a snowball,
+   left arm pointing forward, body twisted, weight on the back foot.
+8. Release: right arm fully extended forward and up after throwing, hand open,
+   body leaning forward, weight on the front foot.
 
 Character: a cheerful chibi athlete, about 2.5 heads tall, playing team "snowball fight" sport.
 Outfit: puffy winter jacket in royal blue (#2f6fe0) with darker blue (#1d4fb0) side panels,
@@ -49,58 +101,15 @@ and do not use any green in the character.
 No shadow on the ground, no snow, no effects, no text labels.
 ```
 
-(意味: 同じ 1 人を全部のマスに。2.5 頭身のちびキャラ、青いダウン・紺のズボン・ヘルメットにゴーグル。
-文字や数字は入れない。おもちゃのような 3D 風、光は左上から。**上から約 55° 見下ろす角度**で足まで全部。
-4 x 2 の同じ大きさのマスに 1 ポーズずつ、マスの間はあける。足もとの高さをそろえる。
-背景は本当の透明。無理なら緑 #00FF00 のべた塗り。影・雪・効果・文字は描かない)
-
----
-
-## 0 回目: 設定画
+### 2 回目: 正面側 (カメラへ向かってくる向き) 8 ポーズ
 
 ```text
-Character design sheet, three views side by side on one image: front view, back view, right side view.
-Standing relaxed, arms slightly away from the body, holding nothing.
-[共通の指示をここに貼る。ただし Layout の行は「three equal cells in one row」に読みかえる]
-```
+Game sprite sheet for a mobile snowball-fight game.
+One character, the SAME character in all 8 cells (same face, same outfit, same proportions, same scale).
+Use the attached character design exactly.
 
-- ここで顔・体形・色を決める。**気に入るまで何度でも作り直す**
-- 決まったら、その絵を以降の回に**参考画像として添えて**「Use the attached character exactly.」と書き足す
-
----
-
-## 1 回目: 背中側 (カメラから遠ざかる向き)
-
-```text
-BACK VIEW: the character faces AWAY from the camera (we see the back of the jacket and helmet),
-seen from high above at about 55 degrees.
-Use the attached character exactly.
-The character throws with the RIGHT hand, toward the top of the image (away from the camera).
-
-Cells, left to right, top row then bottom row:
-1. Idle: standing, relaxed, a snowball held in the right hand at the waist.
-2. Run A: running away from the camera, left foot forward, right arm forward.
-3. Run B: running, both feet passing under the body, slightly up in the air.
-4. Run C: running, right foot forward, left arm forward.
-5. Crouch: squatting very low behind cover, knees fully bent, head ducked, body compact.
-   Total height must be HALF of the idle pose.
-6. Making a snowball: same low squat as cell 5, both hands together in front, packing snow.
-7. Wind-up: right arm pulled far back behind the head holding a snowball,
-   left arm pointing forward, body twisted, weight on the back foot.
-8. Release: right arm fully extended forward and up after throwing, hand open,
-   body leaning forward, weight on the front foot.
-
-[共通の指示をここに貼る]
-```
-
-## 2 回目: 正面側 (カメラへ向かってくる向き)
-
-1 回目の最初の 3 行と動きの説明を、次のように替える。動きの 1〜8 の並びは同じ。
-
-```text
 FRONT VIEW: the character faces TOWARD the camera (we see the face, chest and front of the helmet),
 seen from high above at about 55 degrees.
-Use the attached character exactly.
 The character throws with the RIGHT hand, toward the bottom of the image (toward the camera).
 
 Cells, left to right, top row then bottom row:
@@ -116,15 +125,38 @@ Cells, left to right, top row then bottom row:
 8. Release: right arm fully extended toward the camera after throwing, hand open,
    body leaning forward, weight on the front foot.
 
-[共通の指示をここに貼る]
+Character: a cheerful chibi athlete, about 2.5 heads tall, playing team "snowball fight" sport.
+Outfit: puffy winter jacket in royal blue (#2f6fe0) with darker blue (#1d4fb0) side panels,
+dark navy snow pants, chunky dark boots, light grey gloves,
+a rounded sports helmet in dark blue (#1d4fb0) with small ski goggles pushed up on the front.
+No numbers, no letters, no logos anywhere.
+
+Style: soft toy-like 3D render (like a vinyl figure), clean shapes, gentle cel shading,
+light coming from the upper left, thin darker outline. Bright and friendly.
+
+Camera: HIGH ANGLE, looking DOWN at the character from about 55 degrees above
+(like an isometric strategy game camera). Full body visible, feet included.
+Orthographic look, no perspective distortion.
+
+Layout: a 4 x 2 grid of equal square cells. One pose per cell. Wide empty gap between cells.
+Nothing touches or crosses a cell border. Every character is the same size,
+and all feet stand on the same baseline near the bottom of each cell.
+
+Background: fully TRANSPARENT (real alpha channel, PNG). Do not draw a checkerboard.
+If transparency is impossible, use a flat solid pure green (#00FF00) background with no gradient,
+and do not use any green in the character.
+No shadow on the ground, no snow, no effects, no text labels.
 ```
 
-## 3 回目: 横向き (右を向く)
+### 3 回目: 横向き (右を向く) 8 ポーズ
 
 ```text
+Game sprite sheet for a mobile snowball-fight game.
+One character, the SAME character in all 8 cells (same face, same outfit, same proportions, same scale).
+Use the attached character design exactly.
+
 SIDE VIEW: the character faces to the RIGHT of the image (profile, nose pointing right),
 seen from high above at about 55 degrees.
-Use the attached character exactly.
 The character throws with the RIGHT hand, toward the right of the image.
 
 Cells, left to right, top row then bottom row:
@@ -140,10 +172,37 @@ Cells, left to right, top row then bottom row:
 8. Release: right arm fully extended to the right after throwing, hand open,
    body leaning forward, weight on the front foot.
 
-[共通の指示をここに貼る]
+Character: a cheerful chibi athlete, about 2.5 heads tall, playing team "snowball fight" sport.
+Outfit: puffy winter jacket in royal blue (#2f6fe0) with darker blue (#1d4fb0) side panels,
+dark navy snow pants, chunky dark boots, light grey gloves,
+a rounded sports helmet in dark blue (#1d4fb0) with small ski goggles pushed up on the front.
+No numbers, no letters, no logos anywhere.
+
+Style: soft toy-like 3D render (like a vinyl figure), clean shapes, gentle cel shading,
+light coming from the upper left, thin darker outline. Bright and friendly.
+
+Camera: HIGH ANGLE, looking DOWN at the character from about 55 degrees above
+(like an isometric strategy game camera). Full body visible, feet included.
+Orthographic look, no perspective distortion.
+
+Layout: a 4 x 2 grid of equal square cells. One pose per cell. Wide empty gap between cells.
+Nothing touches or crosses a cell border. Every character is the same size,
+and all feet stand on the same baseline near the bottom of each cell.
+
+Background: fully TRANSPARENT (real alpha channel, PNG). Do not draw a checkerboard.
+If transparency is impossible, use a flat solid pure green (#00FF00) background with no gradient,
+and do not use any green in the character.
+No shadow on the ground, no snow, no effects, no text labels.
 ```
 
----
+### 指示文の意味 (日本語)
+
+- 同じ 1 人を全部のマスに。2.5 頭身のちびキャラ。青いダウン・紺のズボン・ヘルメットにゴーグル
+- 文字・数字・ロゴは入れない (同じ絵を 7 人で使うため)
+- おもちゃのような 3D 風。光は左上から。**上から約 55° 見下ろす角度**で足まで全部
+- 4 x 2 の同じ大きさのマスに 1 ポーズずつ。マスの間をあけ、足もとの高さをそろえる
+- ポーズ: 1 立つ / 2〜4 走る / 5 しゃがむ (立ちの半分の高さ) / 6 丸める / 7 振りかぶり / 8 振り抜き。右投げ
+- 背景は本当の透明。無理なら緑 `#00FF00` のべた塗り。影・雪・効果・文字は描かない
 
 ## うまくいかないときの言い直し
 
@@ -156,6 +215,32 @@ Cells, left to right, top row then bottom row:
 | 隣のマスとくっつく | `Leave a wide empty margin around each character. Make the characters smaller inside the cells.` |
 | 4 x 2 にならず、ばらばらに並ぶ | 1 マスずつ頼み直してもよい (1 ポーズ 1 枚。大きさはこちらでそろえる) |
 | 投げる手が左になる | `Right-handed throw. The snowball is in the RIGHT hand.` (左右が逆でも、こちらで反転できる。向きだけ合っていればよい) |
+
+言い直しの英文 (必要な行だけコピーして、指示文の最後に足す):
+
+```text
+The camera is ABOVE the character, looking down steeply. We see the top of the helmet and the shoulders from above.
+```
+
+```text
+Exactly the same character in all 8 cells. Same colors, same helmet, same face.
+```
+
+```text
+The crouch is very low: the top of the helmet is at half the standing height.
+```
+
+```text
+Flat pure green #00FF00 background. No checkerboard.
+```
+
+```text
+Leave a wide empty margin around each character. Make the characters smaller inside the cells.
+```
+
+```text
+Right-handed throw. The snowball is in the RIGHT hand.
+```
 
 ## 届いたらこちらで確かめること
 

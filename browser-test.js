@@ -485,6 +485,30 @@ async function run() {
     ok(runF && runF.visible && runF.row === 0 && [1, 2, 3].includes(runF.col), `前へ走ると背中の走る絵 (行 ${runF && runF.row} 列 ${runF && runF.col})`);
     ok(stopF && [4, 5].includes(stopF.col), `止まるとしゃがむ絵 (列 ${stopF && stopF.col})`);
 
+    // 倒れるとき: 絵が細長く伸びない (画面での縦横の比が、立っているときと同じ)。消えるまでは薄くならない
+    const fall = await phone.evaluate(async () => {
+      const m = window.__app.match();
+      const q = m.players.find((p) => p.team === 1 && p.alive);
+      const stand = window.__app.spriteShape(q.id);
+      q.alive = false;
+      await new Promise((r) => setTimeout(r, 450));
+      const mid = window.__app.spriteShape(q.id);
+      await new Promise((r) => setTimeout(r, 1200));
+      const end = window.__app.spriteShape(q.id);
+      return { stand, mid, end };
+    });
+    const ratio = (o) => o.side / o.top;
+    // 立っているときも、近くでも遠くでも絵の縦横の比は 1 (1 コマは正方形)
+    const near = await phone.evaluate(() => window.__app.spriteShape(window.__app.me().id));
+    ok(Math.abs(ratio(near) - 1) < 0.08 && Math.abs(ratio(fall.stand) - 1) < 0.08,
+      `立っている絵が縦に伸びない (縦÷横 近く ${ratio(near).toFixed(2)} / 遠く ${ratio(fall.stand).toFixed(2)})`);
+    ok(Math.abs(ratio(fall.mid) / ratio(fall.stand) - 1) < 0.1,
+      `倒れても絵が伸びない (縦÷横 立ち ${ratio(fall.stand).toFixed(2)} → 倒れる途中 ${ratio(fall.mid).toFixed(2)})`);
+    ok(fall.mid.opacity === 1 && fall.mid.visible, `倒れている途中は薄くならない (濃さ ${fall.mid.opacity})`);
+    ok(fall.mid.depthTest === false, '倒れている板は、雪面に隠されない (半分もぐって上半分しか見えなかった)');
+    ok(!fall.end.visible, '倒れたあと消える');
+    ok(fall.stand.top > 60, `選手が大きく見える (板の横幅 ${fall.stand.top.toFixed(0)}px)`);
+
     // 絵が読めないときは、今までの 3D の体のまま遊べる
     const noImg = await browser.newContext({ ...base, viewport: { width: 430, height: 932 }, deviceScaleFactor: 1 });
     const np = await noImg.newPage();

@@ -264,12 +264,14 @@
   // 縦の板は見下ろすと縮んで見えるので、そのぶん縦に伸ばしておく。
   const SPR = { cols: 8, rows: 6, cell: 192, base: 184, figure: 150 };
   const CAM_PITCH = Math.atan2(21, 15);            // camTarget の見下ろす角度 (約 55°)
-  const SPR_W = 1.6;                               // 1 コマの横幅 (m)。立った姿が 1.25m ほどに見える
+  const SPR_W = 2.1;                               // 1 コマの横幅 (m)。立った姿が 1.65m ほどに見える (1.6 では小さいと言われた)
   const SPR_H = SPR_W / Math.cos(CAM_PITCH);       // 縦に立てた板の高さ
   const sprGeo = new T.PlaneGeometry(SPR_W, SPR_H);
   sprGeo.translate(0, SPR_H / 2 - (SPR.cell - SPR.base) / SPR.cell * SPR_H, 0);   // 足もとを原点に
   const sprites = { tex: null, failed: false };
-  const backMarkGeo = new T.RingGeometry(0.34, 0.42, 24);
+  const SPR_K = SPR_W / 1.6;                       // 前の大きさ (1.6) からの倍率。影や輪も合わせる
+  const SPR_FALL = SPR_W / SPR_H;                  // 倒れるとき、縦に伸ばしたぶんを戻す倍率
+  const backMarkGeo = new T.RingGeometry(0.34 * SPR_K, 0.42 * SPR_K, 24);
   const backMarkMat = new T.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.85, depthWrite: false });
 
   function loadSprites() {
@@ -291,6 +293,7 @@
     scene.add(mesh);
     v.spr = { mesh, key: -1 };
     v.pose.visible = false;
+    v.shadow.scale.set(0.84 * SPR_K, 0.84 * SPR_K, 1);
   }
 
   /**
@@ -328,7 +331,8 @@
   /** 頭の上の印を出す高さ */
   function headTop(p) {
     const crouched = C.playerHeight(p) < R.STAND_H;
-    if (sprites.tex) return crouched ? 1.75 : 2.4;
+    // 絵の上端 (縦に立てた板の上での高さ)。立ち 150px・しゃがみ 約 105px (1 コマ 192px、足もと 184px)
+    if (sprites.tex) return (crouched ? 108 : 152) / SPR.cell * SPR_H;
     return C.playerHeight(p) + 0.6;
   }
 
@@ -858,11 +862,21 @@
           v.root.scale.setScalar(0.4 + 0.6 * k);
           if (v.mark) v.mark.visible = false;
           if (v.spr) {
+            // 倒れる: 縦に立てた板のまま傾けると、縦に伸ばしたぶんが斜めに出て細長く伸びて見える。
+            // 倒れる間だけ板をカメラにまっすぐ向け、伸ばしたぶんを戻してから、画面の中で傾ける
             const sm = v.spr.mesh;
-            sm.visible = k > 0;
+            const fade = Math.max(0, 1 - Math.max(0, v.outT - 0.9) / 0.3);   // 最後の 0.3 秒だけ薄くする
+            sm.visible = fade > 0;
             sm.position.copy(v.root.position);
-            sm.rotation.set(0, Math.atan2(camera.position.x - sm.position.x, camera.position.z - sm.position.z), Math.min(1, v.outT * 4) * (v.kb && v.kb.x < 0 ? 1.3 : -1.3));
-            sm.material.opacity = k;
+            sm.quaternion.copy(camera.quaternion);
+            sm.rotateZ(Math.min(1, v.outT * 5) * (v.kb && v.kb.x < 0 ? 1.25 : -1.25));
+            sm.scale.set(1, SPR_FALL, 1);
+            sm.material.opacity = fade;
+            // 横に倒した板の半分は雪面の下へもぐり、地面に隠れて上半分しか見えなかった。倒れている間は奥行きで隠さない
+            sm.material.depthTest = false;
+            sm.renderOrder = 4;
+            if (fade <= 0 && !v.poofed) { v.poofed = true; puff(sm.position.x, 0.4, sm.position.z, 12, 0.7); }
+            v.root.visible = false; v.shadow.visible = fade > 0;
           }
           continue;
         }
@@ -901,6 +915,15 @@
           const sm = v.spr.mesh;
           sm.visible = true;
           sm.material.opacity = 1;
+          sm.material.depthTest = true;
+          sm.renderOrder = 3;
+          // 縦に伸ばす量は、その選手をカメラから見下ろす角度で決める。
+          // 画面の上 (遠く) の選手ほど浅く見るので、決まった角度で伸ばすと遠くの選手が縦長になっていた (縦÷横 1.35)
+          {
+            const dx = camera.position.x - p.x, dz = camera.position.z - p.z, dy = camera.position.y - SPR_H * 0.3;
+            const elev = Math.atan2(dy, Math.hypot(dx, dz));
+            sm.scale.set(1, Math.cos(CAM_PITCH) / Math.max(0.2, Math.cos(elev)), 1);
+          }
           sm.position.set(p.x, v.root.position.y, p.z);
           sm.rotation.set(0, Math.atan2(camera.position.x - p.x, camera.position.z - p.z), 0);
           setFrame(v, pickFrame({
@@ -1169,6 +1192,21 @@
       pickFrame,
       sprites: () => ({ ready: !!sprites.tex, failed: sprites.failed }),
       frameOf: (id) => { const v = views.players[id]; return v && v.spr ? Object.assign({ visible: v.spr.mesh.visible }, v.spr.frame) : null; },
+      // 選手の絵の板が、画面でどんな形に見えているか (横の辺と縦の辺の長さ、px)
+      spriteShape: (id) => {
+        const v = views.players[id];
+        if (!v || !v.spr) return null;
+        const sm = v.spr.mesh;
+        sm.updateMatrixWorld(true);
+        const pos = sm.geometry.attributes.position;
+        const r = els.canvas.getBoundingClientRect();
+        const pt = (i) => {
+          const q = new T.Vector3(pos.getX(i), pos.getY(i), pos.getZ(i)).applyMatrix4(sm.matrixWorld).project(camera);
+          return { x: (q.x + 1) / 2 * r.width, y: (1 - q.y) / 2 * r.height };
+        };
+        const a = pt(0), b = pt(1), c = pt(2);   // 左上・右上・左下
+        return { top: Math.hypot(b.x - a.x, b.y - a.y), side: Math.hypot(c.x - a.x, c.y - a.y), opacity: sm.material.opacity, visible: sm.visible, depthTest: sm.material.depthTest };
+      },
       frames: () => app.frames,
       info: () => ({ calls: renderer.info.render.calls, tris: renderer.info.render.triangles, pr: renderer.getPixelRatio() })
     };

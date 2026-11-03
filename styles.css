@@ -171,7 +171,6 @@ button { font: inherit; color: inherit; cursor: pointer; }
   font-weight: 900;
   touch-action: none;
 }
-.throw small { font-size: 10px; font-weight: 700; opacity: .8; }
 /* 丸めている進み具合 (投げるボタンのふち) */
 .throw .ring {
   position: absolute; inset: -7px;

@@ -333,6 +333,8 @@ async function run() {
       combo: window.__app.app.combo.n
     }), victim);
     // (直前のはじく確かめで当たっていれば、連続ヒットの言葉になる)
+    const fans = await phone.evaluate(() => window.__app.scenery());
+    ok(fans.fans >= 100 && fans.cheer[0] > 0 && fans.cheer[1] === 0, `当てると、当てた側 (あお) の観客が跳ねる (観客 ${fans.fans} 人 / 跳ねる ${fans.cheer.map((v) => v.toFixed(1))})`);
     ok(juice.out && juice.pop.some((t) => /OUT!|ダブル!|トリプル!|連続!/.test(t)), `構えて当てると文字が浮かぶ (${juice.pop.join(',')})`);
 
     // ---- 止まるとしゃがんで丸める
@@ -612,6 +614,7 @@ async function run() {
     const ez = await ezCtx.newPage();
     ez.on('pageerror', (e) => errors.push('かんたん: ' + e.message));
     await ez.goto(URL);
+    await ez.bringToFront();      // 後ろの画面は requestAnimationFrame が止まり、時間が進まない
     await ez.waitForFunction(() => window.__app && window.__app.sprites().ready, null, { timeout: 10000 }).catch(() => {});
     await ez.click('#btnStart');
     await ez.waitForFunction(() => window.__app.match().phase === 'play', null, { timeout: 10000 });
@@ -633,8 +636,9 @@ async function run() {
     const ezBall = await ez.evaluate(() => { const m = window.__app.match(); return m.balls.filter((b) => b.owner === m.human).map((b) => b.home); });
     ok(ezSet.mode === 'easy' && ezPadClass, 'かんたん: 押さえなくても、当たるコースなら投げるボタンが赤い');
     ok(ezBall.length === 1 && ezBall[0] === ezSet.foe, `かんたん: すぐ離しても投げ、玉が狙った相手を追う (${JSON.stringify(ezBall)})`);
+    // (この機械は絵をソフトで描くので 7 コマ/秒ほどしか出ず、試合の時間が実時間の半分ほどで進む。待つ上限は長めに)
     // のぞき投げ: 自陣のシェルターのすぐ裏でタップすると、端から出て投げ、元の所へ戻る
-    await ez.waitForFunction(() => window.__app.me().cd <= 0, null, { timeout: 3000 });
+    await ez.waitForFunction(() => window.__app.me().cd <= 0, null, { timeout: 12000 });
     const pkSet = await ez.evaluate(() => {
       const m = window.__app.match(), me = window.__app.me(), C = window.Core;
       m.balls = [];
@@ -646,9 +650,9 @@ async function run() {
     });
     await ez.waitForTimeout(100);
     await ez.mouse.click(ezPad.x, ezPad.y);
-    await ez.waitForFunction(() => { const m = window.__app.match(); return m.balls.some((b) => b.owner === m.human); }, null, { timeout: 3000 }).catch(() => {});
+    await ez.waitForFunction(() => { const m = window.__app.match(); return m.balls.some((b) => b.owner === m.human); }, null, { timeout: 12000 }).catch(() => {});
     const pkThrow = await ez.evaluate(() => { const me = window.__app.me(); window.__app.match().balls = []; return { x: me.x, peek: !!me.peek }; });
-    await ez.waitForFunction(() => !window.__app.me().peek, null, { timeout: 4000 }).catch(() => {});
+    await ez.waitForFunction(() => !window.__app.me().peek, null, { timeout: 15000 }).catch(() => {});
     const pkBack = await ez.evaluate(() => { const me = window.__app.me(); return { x: me.x, z: me.z, peek: !!me.peek }; });
     ok(pkThrow.peek && pkThrow.x > pkSet.edge, `壁の裏でタップすると、壁の端から出て投げる (投げた x ${pkThrow.x.toFixed(2)} / 壁の端 ${pkSet.edge.toFixed(2)})`);
     ok(!pkBack.peek && Math.hypot(pkBack.x - pkSet.hx, pkBack.z - pkSet.hz) < 0.25, '投げ終わると、元の所 (壁の裏) へ戻る');

@@ -7,7 +7,7 @@
   const C = window.Core;
   const R = C.R;
   const T = window.THREE;
-  const VERSION = 'v10';
+  const VERSION = 'v11';
   const AI_SKILL = 0.5;      // 相手の強さ (前の「ふつう」)。強さのえらびはやめ、投げ方をえらぶ
   const AUTO_CROUCH = 0.2;   // 止まってからしゃがむまで (秒)
   // カメラ: 自分の (h) 上・(back) 後ろから、(ahead) 先の地面を見る
@@ -175,28 +175,144 @@
       return { g, cloth, base: clothGeo.attributes.position.array.slice() };
     });
 
-    // まわりの雪山と木 (遠くの飾り)。数が多いので InstancedMesh で 1 回ずつに束ねる
+    buildScenery();
+  }
+
+  // ------------------------------------------------------------ まわりの景色 (会場)
+  // エンドラインの後ろ: チーム色の低い板・旗・観客席と観客 (当てると、当てた側の観客が跳ねる)。
+  // まわり: 段になった雪の木・雪だるま・雪の山。数が多い物は InstancedMesh で束ねる (1 種類 1 回で描く)。
+  // 背の高い物はコートの外 2m 以上離して置く (カメラから見て、コートの上にかぶらない)
+  const scenery = { fans: [], cheerT: [0, 0], bodies: null, heads: null, hats: null };
+  function buildScenery() {
     const rng = C.mulberry32(99);
-    const NT = 46, NM = 24;
-    const cones = new T.InstancedMesh(new T.ConeGeometry(0.33, 1, 7), lambert(0x3f7a5a), NT);
-    const caps = new T.InstancedMesh(new T.ConeGeometry(0.18, 0.38, 7), lambert(0xffffff), NT);
-    const trunks = new T.InstancedMesh(new T.CylinderGeometry(0.12, 0.15, 0.7, 6), lambert(0x7a5a40), NT);
-    const mounds = new T.InstancedMesh(new T.SphereGeometry(1, 10, 6), lambert(0xffffff), NM);
     const o = new T.Object3D();
-    for (let i = 0; i < NT; i++) {
-      const x = (rng() < 0.5 ? -1 : 1) * (8 + rng() * 22);
-      const z = -45 + rng() * 85;
-      const h = 2.5 + rng() * 3;
-      o.position.set(x, h / 2 + 0.6, z); o.scale.set(h, h, h); o.updateMatrix(); cones.setMatrixAt(i, o.matrix);
-      o.position.set(x, h * 0.86 + 0.6, z); o.updateMatrix(); caps.setMatrixAt(i, o.matrix);
-      o.position.set(x, 0.35, z); o.scale.set(1, 1, 1); o.updateMatrix(); trunks.setMatrixAt(i, o.matrix);
+    const put = (mesh, i, x, y, z, sx, sy, sz, ry) => {
+      o.position.set(x, y, z); o.rotation.set(0, ry || 0, 0); o.scale.set(sx, sy, sz == null ? sx : sz); o.updateMatrix(); mesh.setMatrixAt(i, o.matrix);
+    };
+    const END = R.HALF_L + 1.6;      // 板の位置 (エンドラインの 1.6m 外)
+
+    // 木: 3 段の枝 (緑の円すい) に、それぞれ雪の帽子。幹
+    const trees = [];
+    const far = (x, z) => Math.abs(x) > R.HALF_W + 2.5 || Math.abs(z) > END + 4.5;
+    for (let i = 0; i < 400 && trees.length < 90; i++) {
+      const x = (rng() * 2 - 1) * 26, z = (rng() * 2 - 1) * 46;
+      if (!far(x, z)) continue;
+      if (Math.abs(z) > END - 1 && Math.abs(z) < END + 4.5 && Math.abs(x) < 10.5) continue;   // 観客席の所はあける
+      if (trees.some((t) => Math.hypot(t.x - x, t.z - z) < 2.2)) continue;
+      trees.push({ x, z, h: 2.4 + rng() * 2.6 });
     }
+    const tierGeo = new T.ConeGeometry(1, 1, 7, 1, true), snowGeo = new T.ConeGeometry(1, 1, 7, 1, true);   // 底は見えないので開けておく
+    const tiers = new T.InstancedMesh(tierGeo, lambert(0x2f6b52), trees.length * 3);
+    const snows = new T.InstancedMesh(snowGeo, lambert(0xffffff), trees.length * 3);
+    const trunks = new T.InstancedMesh(new T.CylinderGeometry(0.13, 0.17, 1, 6), lambert(0x7a5a40), trees.length);
+    trees.forEach((t, i) => {
+      const r0 = t.h * 0.36;
+      put(trunks, i, t.x, 0.3, t.z, 1, 0.6, 1);
+      for (let k = 0; k < 3; k++) {
+        const r = r0 * (1 - k * 0.27), hh = t.h * 0.42, y = 0.5 + t.h * 0.26 * k + hh / 2;
+        put(tiers, i * 3 + k, t.x, y, t.z, r, hh, r, rng() * 6);
+        put(snows, i * 3 + k, t.x, y + hh * 0.2, t.z, r * 0.72, hh * 0.62, r * 0.72, rng() * 6);
+      }
+    });
+    scene.add(tiers, snows, trunks);
+
+    // 雪の山 (低い)
+    const NM = 26;
+    const mounds = new T.InstancedMesh(new T.SphereGeometry(1, 9, 5), lambert(0xffffff), NM);
     for (let i = 0; i < NM; i++) {
-      o.position.set((rng() < 0.5 ? -1 : 1) * (6.8 + rng() * 6), 0, -30 + rng() * 60);
-      o.scale.set(1.5 + rng() * 2.5, 0.5 + rng() * 0.6, 1.5 + rng() * 2);
-      o.updateMatrix(); mounds.setMatrixAt(i, o.matrix);
+      let x, z;
+      do { x = (rng() * 2 - 1) * 20; z = (rng() * 2 - 1) * 40; } while (!(Math.abs(x) > R.HALF_W + 1.8 || Math.abs(z) > END + 4.5));
+      put(mounds, i, x, 0, z, 1.2 + rng() * 2, 0.35 + rng() * 0.45, 1.2 + rng() * 1.6, rng() * 3);
     }
-    scene.add(cones, caps, trunks, mounds);
+    scene.add(mounds);
+
+    // 雪だるま (コートの四すみの外)
+    const white = lambert(0xffffff), coal = lambert(0x2a2f3a), carrot = lambert(0xff8a2a);
+    const ball = new T.SphereGeometry(1, 14, 10), eye = new T.SphereGeometry(0.05, 6, 4), nose = new T.ConeGeometry(0.06, 0.3, 6);
+    for (const [x, z, team] of [[-R.HALF_W - 2.4, END - 0.4, 0], [R.HALF_W + 2.4, END - 0.4, 0], [-R.HALF_W - 2.4, -END + 0.4, 1], [R.HALF_W + 2.4, -END + 0.4, 1]]) {
+      const g = new T.Group();
+      const b1 = new T.Mesh(ball, white); b1.scale.setScalar(0.55); b1.position.y = 0.5;
+      const b2 = new T.Mesh(ball, white); b2.scale.setScalar(0.38); b2.position.y = 1.25;
+      const face = z > 0 ? -1 : 1;     // コートの方を向く
+      const e1 = new T.Mesh(eye, coal); e1.position.set(-0.12, 1.33, face * 0.34);
+      const e2 = new T.Mesh(eye, coal); e2.position.set(0.12, 1.33, face * 0.34);
+      const n = new T.Mesh(nose, carrot); n.rotation.x = face * Math.PI / 2; n.position.set(0, 1.25, face * 0.45);
+      const scarf = new T.Mesh(new T.TorusGeometry(0.3, 0.07, 6, 16), lambert(COLORS.team[team])); scarf.rotation.x = Math.PI / 2; scarf.position.y = 1.0;
+      const hat = new T.Mesh(new T.CylinderGeometry(0.22, 0.24, 0.3, 12), lambert(COLORS.teamDark[team])); hat.position.y = 1.68;
+      g.add(b1, b2, e1, e2, n, scarf, hat);
+      g.position.set(x, 0, z);
+      scene.add(g);
+    }
+
+    // エンドラインの後ろ: チーム色の板・旗・観客席
+    const N_ROW = 3, N_COL = 19, STEP = 0.78;
+    const fanCount = 2 * N_ROW * N_COL;
+    scenery.bodies = new T.InstancedMesh(new T.CylinderGeometry(0.2, 0.26, 0.62, 6, 1, true), lambert(0xffffff), fanCount);
+    scenery.heads = new T.InstancedMesh(new T.SphereGeometry(0.19, 7, 5), lambert(0xffffff), fanCount);
+    scenery.hats = new T.InstancedMesh(new T.SphereGeometry(0.2, 7, 3, 0, Math.PI * 2, 0, Math.PI / 2), lambert(0xffffff), fanCount);
+    const skin = new T.Color(0xf6d2b4), cTmp = new T.Color();
+    const hatCols = [0xffffff, 0xffd34d, 0x6cc58a, 0xff9ec2];
+    let fi = 0;
+    for (const team of [0, 1]) {
+      const sz = team === 0 ? 1 : -1;
+      const z0 = sz * END;
+      // 低い板 (チーム色) と、白い帯
+      const board = new T.Mesh(new T.BoxGeometry(R.HALF_W * 2 + 3, 0.7, 0.18), lambert(COLORS.team[team]));
+      board.position.set(0, 0.35, z0); scene.add(board);
+      const band = new T.Mesh(new T.BoxGeometry(R.HALF_W * 2 + 3, 0.12, 0.19), lambert(0xffffff));
+      band.position.set(0, 0.5, z0); scene.add(band);
+      // 旗 (板の上に 5 本)
+      for (let k = -2; k <= 2; k++) {
+        const pole = new T.Mesh(new T.CylinderGeometry(0.035, 0.035, 1.9, 6), lambert(0xdde3ea));
+        pole.position.set(k * 3, 0.95, z0 + sz * 0.25); scene.add(pole);
+        const fl = new T.Mesh(new T.PlaneGeometry(0.8, 0.5), lambert(k % 2 ? 0xffffff : COLORS.team[team], { side: T.DoubleSide }));
+        fl.position.set(k * 3 + 0.42, 1.62, z0 + sz * 0.25); scene.add(fl);
+      }
+      // 観客席 (段)
+      for (let r = 0; r < N_ROW; r++) {
+        const step = new T.Mesh(new T.BoxGeometry(N_COL * STEP + 0.6, 0.35 * (r + 1), 0.8), lambert(r % 2 ? 0xe4edf7 : 0xf4f8fd));
+        step.position.set(0, 0.175 * (r + 1), z0 + sz * (1.1 + r * 0.8)); scene.add(step);
+      }
+      for (let r = 0; r < N_ROW; r++) {
+        for (let c = 0; c < N_COL; c++) {
+          const x = (c - (N_COL - 1) / 2) * STEP + (rng() - 0.5) * 0.18;
+          const z = z0 + sz * (1.1 + r * 0.8);
+          const base = 0.35 * (r + 1);
+          // 服: 応援するチームの色が多め。ほかは明るい色をまぜる
+          const coat = rng() < 0.7 ? COLORS.team[team] : [0xffb020, 0x5cc8c8, 0x9b7be0, 0xffffff][Math.floor(rng() * 4)];
+          scenery.bodies.setColorAt(fi, cTmp.set(coat).offsetHSL(0, 0, (rng() - 0.5) * 0.12));
+          scenery.heads.setColorAt(fi, skin);
+          scenery.hats.setColorAt(fi, cTmp.set(hatCols[Math.floor(rng() * hatCols.length)]));
+          scenery.fans.push({ x, z, base, team, ph: rng() * 6.28, sp: 0.8 + rng() * 0.6, jump: 0.25 + rng() * 0.2 });
+          fi++;
+        }
+      }
+    }
+    scene.add(scenery.bodies, scenery.heads, scenery.hats);
+    updateFans(0);
+  }
+
+  /**
+   * 観客の動き: ふだんは小さく揺れる (1 秒に 10 回だけ書き換える)。当てた側 (cheerT) は跳ねる (毎コマ)。
+   * 何もしていないときは書き換えない (遅い端末で毎コマ 342 個を書き換えると効いた)
+   */
+  function updateFans(t, dt) {
+    if (!scenery.bodies) return;
+    if (dt) for (const k of [0, 1]) scenery.cheerT[k] = Math.max(0, scenery.cheerT[k] - dt);
+    const cheering = scenery.cheerT[0] > 0 || scenery.cheerT[1] > 0;
+    if (dt && !cheering && !scenery.wasCheering && t - (scenery.lastIdle || 0) < 0.1) return;
+    scenery.lastIdle = t; scenery.wasCheering = cheering;
+    const o = updateFans.o || (updateFans.o = new T.Object3D());
+    scenery.fans.forEach((f, i) => {
+      const ch = scenery.cheerT[f.team];
+      const y = f.base + (ch > 0 ? Math.abs(Math.sin(t * 9 * f.sp + f.ph)) * f.jump * Math.min(1, ch) : Math.max(0, Math.sin(t * 1.6 * f.sp + f.ph)) * 0.04);
+      o.position.set(f.x, y + 0.31, f.z); o.rotation.set(0, 0, 0); o.scale.set(1, 1, 1); o.updateMatrix(); scenery.bodies.setMatrixAt(i, o.matrix);
+      o.position.y = y + 0.8; o.updateMatrix(); scenery.heads.setMatrixAt(i, o.matrix);
+      o.position.y = y + 0.86; o.updateMatrix(); scenery.hats.setMatrixAt(i, o.matrix);
+    });
+    scenery.bodies.instanceMatrix.needsUpdate = true;
+    scenery.heads.instanceMatrix.needsUpdate = true;
+    scenery.hats.instanceMatrix.needsUpdate = true;
   }
 
   // 影は丸い板 (影の計算をしないぶん軽い)
@@ -765,6 +881,7 @@
           break;
         }
         case 'hit': {
+          { const q = app.match.players[e.player]; if (q) scenery.cheerT[1 - q.team] = 1.6; }   // 当てた側の観客が跳ねる
           const v = views.players[e.player];
           if (v) {
             v.outT = 0;
@@ -1025,6 +1142,7 @@
       camera.position.y += (Math.random() - 0.5) * app.shake * 0.6;
     }
     camera.lookAt(camLook);
+    updateFans(performance.now() / 1000, Math.min(0.05, (performance.now() - (updateFans.last || performance.now())) / 1000)); updateFans.last = performance.now();
     renderer.render(scene, camera);
   }
   function lerpN(a, b, k) { return a + (b - a) * Math.max(0, Math.min(1, k)); }
@@ -1282,6 +1400,8 @@
       currentAim,
       setCam: (o) => { Object.assign(CAM, o); camera.fov = CAM.fov; camera.updateProjectionMatrix(); snapCamera(); },
       pickFrame,
+      scenery: () => ({ fans: scenery.fans.length, cheer: scenery.cheerT.slice() }),
+      scene: () => scene,
       sprites: () => ({ ready: !!sprites.tex, failed: sprites.failed }),
       hudBottom: () => app.hudBottom,
       textures: () => ({ loaded: app.tex.loaded, failed: app.tex.failed, names: app.tex.names.slice() }),

@@ -1,12 +1,13 @@
 {
-  "name": "app-template",
+  "name": "yukigassen",
   "version": "1.0.0",
-  "description": "ビルドなしで動くアプリの雛形 (進め方のルールつき)",
+  "description": "雪合戦 フラッグ7 — 7対7のスポーツ雪合戦 (スマホ向け 3D)",
   "private": true,
   "scripts": {
     "start": "node serve.js",
     "test": "node --test *.test.js",
-    "test:ui": "node browser-test.js"
+    "test:ui": "node browser-test.js",
+    "bundle": "node bundle.js"
   },
   "license": "MIT"
 }

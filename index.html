@@ -2,33 +2,115 @@
 <html lang="ja">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<title>アプリの雛形</title>
-<meta name="description" content="ビルドなしで動くアプリの雛形">
-<meta name="theme-color" content="#151a2e">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+<title>雪合戦 フラッグ7</title>
+<meta name="description" content="7対7のスポーツ雪合戦。雪玉を狙って投げ、敵陣のフラッグを奪う">
+<meta name="theme-color" content="#cfe3f5">
+<meta name="apple-mobile-web-app-capable" content="yes">
 <link rel="icon" href="./icon.svg" type="image/svg+xml">
+<link rel="icon" href="./icon-512.png" type="image/png" sizes="512x512">
+<link rel="apple-touch-icon" href="./apple-touch-icon.png">
+<meta name="apple-mobile-web-app-title" content="雪合戦7">
 <link rel="stylesheet" href="./styles.css">
 </head>
 <body>
 
-<div id="app">
-  <header id="topbar">
-    <h1 class="title">アプリの雛形</h1>
-    <div class="topbar-actions">
-      <button type="button" id="btnAction" class="btn btn-primary">ためす</button>
-    </div>
-  </header>
+<div id="game">
+  <canvas id="view"></canvas>
 
-  <main id="stage">
-    <p class="lead">ここにアプリを作る。</p>
-    <p class="result" id="result">—</p>
-    <p class="note">
-      ロジックは <code>src/core.js</code> に、画面は <code>src/app.js</code> に書く。<br>
-      <code>npm test</code> でロジックを、<code>npm run test:ui</code> で画面を確かめる。
-    </p>
-  </main>
+  <!-- 上の表示 -->
+  <div class="hud" id="hud">
+    <!-- 1 段の細い帯 (コートの奥を隠さないように) -->
+    <div class="score">
+      <div class="team blue">
+        <span class="row1"><b class="tname">あお</b><span class="pts" id="ptsBlue">0pt</span><span class="sets" id="setsBlue"></span></span>
+        <span class="alive" id="aliveBlue"></span>
+        <span class="stockline" id="stockBlue">雪玉 69</span>
+      </div>
+      <div class="clock">
+        <span class="time" id="time">1:30</span>
+        <span class="sub"><span class="setno" id="setNo">SET 1</span><span class="in-enemy" id="inEnemy">敵陣 0/3</span></span>
+      </div>
+      <div class="team red">
+        <span class="row1"><span class="sets" id="setsRed"></span><span class="pts" id="ptsRed">0pt</span><b class="tname">あか</b></span>
+        <span class="alive" id="aliveRed"></span>
+        <span class="stockline" id="stockRed">雪玉 69</span>
+      </div>
+    </div>
+    <button type="button" class="pause" id="btnPause" aria-label="一時停止">Ⅱ</button>
+  </div>
+
+  <!-- 操作 -->
+  <div class="controls" id="controls">
+    <div class="stick-zone" id="stickZone">
+      <div class="stick" id="stick"><div class="knob" id="knob"></div></div>
+      <div class="hint" id="moveHint">なぞって移動 ・ 止まるとしゃがむ</div>
+    </div>
+    <div class="throw" id="throwPad">
+      <span class="ring" id="makeRing"></span>
+      <div class="balls" id="myBalls"></div>
+      <span class="label">投げる</span>
+    </div>
+  </div>
+
+  <div class="pops" id="pops"></div>
+  <!-- 画面の外や上の帯の下にいる物の向き: 狙っている相手・相手のフラッグ -->
+  <div class="edge-mark lock" id="markLock" hidden><i></i><span>狙い</span></div>
+  <div class="edge-mark flag" id="markFlag" hidden><i></i><span id="markFlagText">フラッグ</span></div>
+  <div class="banner" id="banner" hidden></div>
+  <div class="warn" id="warn" hidden>敵陣はもう3人。<b>入ると反則負け</b></div>
+
+  <!-- タイトル -->
+  <section class="screen" id="vTitle">
+    <div class="title-card">
+      <h1><span>雪合戦</span><b>フラッグ7</b></h1>
+      <p class="tag">7対7 ・ 2セット先取 ・ 当たったら退場</p>
+      <div class="diff" role="group" aria-label="投げ方">
+        <button type="button" data-mode="easy" class="on">かんたん<small>押すとすぐ投げる・玉が追う</small></button>
+        <button type="button" data-mode="hard">むずかしい<small>押さえて構え、離して投げる</small></button>
+      </div>
+      <button type="button" class="btn-start" id="btnStart">試合開始</button>
+      <details class="rules">
+        <summary>あそびかた・ルール</summary>
+        <ul>
+          <li><b>セットの勝ち</b>(1セット 90秒): 相手の<b>フラッグを抜く</b> / 相手を<b>全員アウト</b>にする(どちらも10ポイント) / 時間切れは<b>コートに残った人数</b>がポイント</li>
+          <li><b>2セット先取</b>。セット数が同じなら<b>ポイント合計</b>、それも同じなら<b>ビクトリースロー</b>(相手のフラッグに交互に投げる)</li>
+          <li>雪玉に当たったら<b>アウト</b>。地面やシェルターに当たった玉は無効</li>
+          <li>あなたは<b>フォワード</b>(黄色の輪)。アウトになったら仲間に交代</li>
+          <li><b>相手コートに入れるのは3人まで</b>。4人目が入るとそのセットは負け(上の「敵陣 n/3」)</li>
+          <li>フォワードは自陣の<b>バックライン</b>(点線)より後ろへ下がれない。バックス(白帯)はフラッグの守り</li>
+          <li>雪玉はチームで<b>1セット90個</b>。持てるのは<b>3個まで</b>。<b>止まるとしゃがんで</b>1個ずつ丸める(丸めている間は攻められない)</li>
+          <li>投げたあとは<b>構え直し</b>(約1秒)。続けては投げられない</li>
+          <li><b>壁のすぐ裏</b>にいれば、正面からは当たらない(頭越しには狙われない)。壁の裏で投げると、<b>自動で横へのぞいて投げ、戻る</b>。のぞいている間は当たる</li>
+        </ul>
+        <p class="how">左側をなぞって移動。右下の<b>投げる</b>で、足もとに輪が出ている相手へ投げる。輪が<b>赤</b>なら当たるコース(灰色は壁に隠れている)。押したまま<b>相手の方へずらす</b>と、その相手を狙う。動きの先読みも、壁越しの山なりも自動。<br><b>かんたん</b>: 押すとすぐ投げ、玉が相手へ曲がっていく。<br><b>むずかしい</b>: 押さえている間に輪が締まり、<b>締まりきって赤</b>で離すと当たる(すぐ離すとぶれる)。構えている間は立つので、相手からも狙われる。</p>
+      </details>
+    </div>
+  </section>
+
+  <!-- 一時停止 -->
+  <section class="screen" id="vPause" hidden>
+    <div class="card">
+      <h2>一時停止</h2>
+      <button type="button" class="btn-start" id="btnResume">つづける</button>
+      <button type="button" class="btn-sub" id="btnQuit">タイトルへ</button>
+    </div>
+  </section>
+
+  <!-- 試合結果 -->
+  <section class="screen" id="vResult" hidden>
+    <div class="card">
+      <h2 id="resultTitle">勝利!</h2>
+      <ol class="sets-list" id="resultSets"></ol>
+      <button type="button" class="btn-start" id="btnAgain">もう一度</button>
+      <button type="button" class="btn-sub" id="btnToTitle">タイトルへ</button>
+    </div>
+  </section>
+
+  <div class="ver" id="ver"></div>
 </div>
 
+<script src="./three.min.js"></script>
 <script src="./core.js"></script>
 <script src="./app.js"></script>
 </body>

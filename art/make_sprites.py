@@ -12,6 +12,7 @@
   5. あおの青い所を赤に塗り替えて、あかの 3 行を作る
   6. 8 列 x 6 行 (あお 背中・正面・横 / あか 背中・正面・横) に並べて WebP で書き出す
   7. 暗い地と明るい地に並べた見本 (art/check_sprites.png) も書き出す (目で見る用)
+  あとから届いた 1 枚絵 (OVERRIDE) は、もとのコマとヘルメットの幅・足もと・頭の真ん中をそろえて差し替える
 """
 import json
 import os
@@ -28,6 +29,11 @@ BASE = CELL - 8      # 足もとの線 (上から)
 IDLE_H = 150         # 立ちの高さ (px)。走る絵は立ちより 1 割ほど高いので、上に余白を残す
 SHEETS = ['player_back.png', 'player_front.png', 'player_side.png']
 MIRROR = {('player_back.png', 6)}   # 左手で投げていたコマ (0 から数える)
+# あとから届いた 1 枚絵で差し替えるコマ: (絵, コマ) -> ファイル。背景が黒の JPEG でもよい
+OVERRIDE = {
+    ('player_back.png', 4): 'player_back_crouch.jpg',   # 背中側のしゃがむ
+    ('player_back.png', 5): 'player_back_crouch.jpg',   # 背中側の丸める (同じ絵。手もとに雪がある)
+}
 
 
 def clean_alpha(rgba):
@@ -65,6 +71,63 @@ def components(mask):
     return label, out
 
 
+def load_black_bg(path):
+    """背景が黒 (0〜2) の JPEG を透明にする。ふちからつながる黒だけを抜く (体の中の黒い輪郭は残す)"""
+    rgb = np.array(Image.open(os.path.join(HERE, path)).convert('RGB')).astype(np.int32)
+    h, w = rgb.shape[:2]
+    mx = rgb.max(axis=2)
+    bg = np.zeros((h, w), bool)
+    q = deque()
+    for y in range(h):
+        for x in (0, w - 1):
+            if mx[y, x] <= 6 and not bg[y, x]:
+                bg[y, x] = True; q.append((y, x))
+    for x in range(w):
+        for y in (0, h - 1):
+            if mx[y, x] <= 6 and not bg[y, x]:
+                bg[y, x] = True; q.append((y, x))
+    while q:
+        y, x = q.popleft()
+        for dy, dx in ((1, 0), (-1, 0), (0, 1), (0, -1)):
+            yy, xx = y + dy, x + dx
+            if 0 <= yy < h and 0 <= xx < w and not bg[yy, xx] and mx[yy, xx] <= 6:
+                bg[yy, xx] = True; q.append((yy, xx))
+    alpha = np.where(bg, 0, 255).astype(np.int32)
+    # ふち: 背景に接している暗い画素は、明るさに応じて半透明にする (JPEG のにじみ)
+    near = np.zeros_like(bg)
+    near[1:] |= bg[:-1]; near[:-1] |= bg[1:]; near[:, 1:] |= bg[:, :-1]; near[:, :-1] |= bg[:, 1:]
+    edge = near & ~bg & (mx <= 24)
+    alpha[edge] = np.clip((mx[edge] - 6) * 255 // 18, 0, 255)
+    out = np.zeros((h, w, 4), np.uint8)
+    out[..., :3] = rgb
+    out[..., 3] = alpha
+    out[alpha == 0, :3] = 0
+    return out
+
+
+def helmet_width(cell):
+    """頭のあたり (上から 30%) で、不透明な画素がいちばん横に広い行の幅 (= ヘルメットの幅)"""
+    x0, y0, x1, y1 = bbox(cell[..., 3])
+    top = cell[y0:y0 + int((y1 - y0) * 0.3), :, 3] > 128
+    widths = [int(np.ptp(np.nonzero(r)[0])) + 1 for r in top if r.any()]
+    return max(widths)
+
+
+def fit_override(orig, path):
+    """差し替えの絵を、もとのコマと同じ大きさ・同じ位置に合わせる (ヘルメットの幅・足もと・頭の真ん中)"""
+    src = load_black_bg(path)
+    k = helmet_width(orig) / helmet_width(src)
+    img = Image.fromarray(src).resize((round(src.shape[1] * k), round(src.shape[0] * k)), Image.LANCZOS)
+    small = np.array(img)
+    ox0, oy0, ox1, oy1 = bbox(orig[..., 3])
+    sx0, sy0, sx1, sy1 = bbox(small[..., 3])
+    dx = round(head_center_x(orig) - head_center_x(small))
+    dy = oy1 - sy1
+    out = Image.new('RGBA', (orig.shape[1], orig.shape[0]), (0, 0, 0, 0))
+    out.paste(img, (dx, dy), img)
+    return np.array(out)
+
+
 def cut_cells(path):
     im = np.array(Image.open(os.path.join(HERE, path)).convert('RGBA'))
     im = clean_alpha(im)
@@ -83,6 +146,8 @@ def cut_cells(path):
             cell[np.isin(label, drop)] = 0
         if (path, i) in MIRROR:
             cell = cell[:, ::-1].copy()
+        if (path, i) in OVERRIDE:
+            cell = fit_override(cell, OVERRIDE[(path, i)])
         cells.append(cell)
     return cells
 

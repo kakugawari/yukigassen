@@ -70,6 +70,7 @@ bundle.js                 テストプレイ用に 1 枚の HTML へまとめる
 players.webp              選手の絵 (art/make_sprites.py が作る。手で直さない)
 ASSETS.md                 画像に置き換える物の一覧 (大きさ・形式・背景の抜き方)
 PROMPT_PLAYERS.md         選手の絵を生成するときの指示 (英語の指示文つき)
+PROMPT_COURT.md           コートと壁 (雪面・シェルター・シャトー・旗) の絵を生成するときの指示
 art/                      届いた絵の元 (手を入れない) と、そこから切り出すスクリプト・見本 (check_sprites.png)
 core.test.js              ロジックのテスト (node --test)
 browser-test.js           ブラウザで動かすテスト

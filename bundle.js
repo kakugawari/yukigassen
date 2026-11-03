@@ -13,8 +13,10 @@ html = html.replace('<link rel="stylesheet" href="./styles.css">', () => `<style
 html = html.replace(/<link rel="icon"[^>]*>\n?/, '');
 // 絵は data: URI にして埋め込む (app.js は window.ASSETS があればそちらを読む)
 const assets = {};
-for (const f of ['players.webp']) {
-  assets[f] = 'data:image/webp;base64,' + fs.readFileSync(path.join(ROOT, f)).toString('base64');
+const MIME = { '.webp': 'image/webp', '.jpg': 'image/jpeg', '.png': 'image/png' };
+const images = ['players.webp', ...fs.readdirSync(ROOT).filter((f) => /^tex_.*\.jpg$/.test(f)).sort()];
+for (const f of images) {
+  assets[f] = `data:${MIME[path.extname(f)]};base64,` + fs.readFileSync(path.join(ROOT, f)).toString('base64');
 }
 html = html.replace('<script src="./core.js"></script>', () => `<script>window.ASSETS = ${JSON.stringify(assets)};</script>\n<script src="./core.js"></script>`);
 for (const f of ['three.min.js', 'core.js', 'app.js']) {

@@ -493,8 +493,9 @@ async function run() {
       q.alive = false;
       await new Promise((r) => setTimeout(r, 450));
       const mid = window.__app.spriteShape(q.id);
-      await new Promise((r) => setTimeout(r, 1200));
-      const end = window.__app.spriteShape(q.id);
+      // 倒れる動きは 1 コマの時間 (上限 0.05 秒) で進むので、遅い描画では実時間より遅れる。消えるまで待つ
+      let end = window.__app.spriteShape(q.id);
+      for (let i = 0; i < 80 && end.visible; i++) { await new Promise((r) => setTimeout(r, 100)); end = window.__app.spriteShape(q.id); }
       return { stand, mid, end };
     });
     const ratio = (o) => o.side / o.top;
@@ -508,6 +509,11 @@ async function run() {
     ok(fall.mid.depthTest === false, '倒れている板は、雪面に隠されない (半分もぐって上半分しか見えなかった)');
     ok(!fall.end.visible, '倒れたあと消える');
     ok(fall.stand.top > 60, `選手が大きく見える (板の横幅 ${fall.stand.top.toFixed(0)}px)`);
+
+    // 地面と壁の絵が全部読めている (シェルター 3 色・シャトー 2 色・雪面 2・上面・旗 2)
+    await phone.waitForFunction(() => window.__app.textures().loaded >= 10, null, { timeout: 10000 }).catch(() => {});
+    const texs = await phone.evaluate(() => window.__app.textures());
+    ok(texs.loaded === 10 && texs.failed === 0, `地面と壁の絵 ${texs.loaded} 枚読めた (失敗 ${texs.failed})`);
 
     // 絵が読めないときは、今までの 3D の体のまま遊べる
     const noImg = await browser.newContext({ ...base, viewport: { width: 430, height: 932 }, deviceScaleFactor: 1 });

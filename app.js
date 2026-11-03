@@ -7,7 +7,7 @@
   const C = window.Core;
   const R = C.R;
   const T = window.THREE;
-  const VERSION = 'v4';
+  const VERSION = 'v5';
   const AUTO_CROUCH = 0.2;   // 止まってからしゃがむまで (秒)
 
   const $ = (id) => document.getElementById(id);
@@ -70,12 +70,33 @@
 
   const lambert = (c, extra) => new T.MeshLambertMaterial(Object.assign({ color: c }, extra || {}));
 
+  // ------------------------------------------------------------ 地面と壁の絵 (tex_*.jpg)
+  // art/make_court.py が作る。読めるまで (読めなかったら) は今までの色のまま
+  const texLoader = new T.TextureLoader();
+  app.tex = { loaded: 0, failed: 0, names: [] };
+  function applyTex(mat, name, repeat, glow) {
+    const url = (window.ASSETS && window.ASSETS[name]) || './' + name;
+    texLoader.load(url, (t) => {
+      t.colorSpace = T.SRGBColorSpace;
+      t.anisotropy = 4;
+      if (repeat) { t.wrapS = t.wrapT = T.RepeatWrapping; t.repeat.set(repeat[0], repeat[1]); }
+      mat.map = t;
+      mat.color.setHex(0xffffff);
+      // 白い壁は光の当たり方で灰色に沈んで見えたので、同じ絵を少し光らせて明るさを足す (模様は残る)
+      if (glow) { mat.emissiveMap = t; mat.emissive.setScalar(glow); }
+      mat.needsUpdate = true;
+      app.tex.loaded++; app.tex.names.push(name);
+    }, undefined, () => { app.tex.failed++; });
+    return mat;
+  }
+
   function buildField() {
-    const ground = new T.Mesh(new T.PlaneGeometry(90, 120), lambert(COLORS.snow));
+    // 雪面は 1 枚の絵が 6m 四方 (コートの中は 3.4m) になるように敷きつめる
+    const ground = new T.Mesh(new T.PlaneGeometry(90, 120), applyTex(lambert(COLORS.snow), 'tex_ground.jpg', [15, 20]));
     ground.rotation.x = -Math.PI / 2;
     scene.add(ground);
 
-    const court = new T.Mesh(new T.PlaneGeometry(R.HALF_W * 2, R.HALF_L * 2), lambert(COLORS.court));
+    const court = new T.Mesh(new T.PlaneGeometry(R.HALF_W * 2, R.HALF_L * 2), applyTex(lambert(COLORS.court), 'tex_court.jpg', [3, 10.6]));
     court.rotation.x = -Math.PI / 2;
     court.position.y = 0.005;
     scene.add(court);
@@ -98,20 +119,24 @@
       for (let x = -R.HALF_W + 0.25; x < R.HALF_W; x += 0.9) line(0.5, 0.1, x, sgn * R.BACK_LINE_U, backMat);
     }
 
-    // シェルター (空気で膨らませた白い壁。チームの色の帯つき)
+    // シェルターとシャトー (空気でふくらませた白い壁。チームの色の帯つき)。
+    // 前と後ろの面に壁の絵、横の面にも同じ絵、上に上面の絵を貼る。絵には帯が描いてある
+    const faceMat = {};
+    const faceOf = (s) => {
+      const key = s.kind === 'chateau' ? `tex_chateau_${s.team === 0 ? 'blue' : 'red'}.jpg`
+        : `tex_shelter_${s.team < 0 ? 'center' : s.team === 0 ? 'blue' : 'red'}.jpg`;
+      if (!faceMat[key]) faceMat[key] = applyTex(lambert(0xf3f7fc), key, null, 0.35);
+      return faceMat[key];
+    };
+    const topMat = applyTex(lambert(0xf3f7fc), 'tex_walltop.jpg', null, 0.35);
+    const bottomMat = lambert(0xdfe7f1);
     for (const s of C.SHELTERS) {
       const g = new T.Group();
-      const body = new T.Mesh(new T.BoxGeometry(s.w, s.h - 0.12, s.d), lambert(0xf3f7fc));
-      body.position.y = (s.h - 0.12) / 2;
+      const face = faceOf(s);
+      // BoxGeometry の面の順: +x, -x, +y (上), -y (下), +z, -z
+      const body = new T.Mesh(new T.BoxGeometry(s.w, s.h, s.d), [face, face, topMat, bottomMat, face, face]);
+      body.position.y = s.h / 2;
       g.add(body);
-      const top = new T.Mesh(new T.CylinderGeometry(s.d / 2, s.d / 2, s.w, 14), lambert(0xf3f7fc));
-      top.rotation.z = Math.PI / 2;
-      top.position.y = s.h - 0.12;
-      top.scale.set(1, 1, 1);
-      g.add(top);
-      const band = new T.Mesh(new T.BoxGeometry(s.w + 0.02, 0.14, s.d + 0.02), lambert(COLORS.shelter[s.team < 0 ? 2 : s.team]));
-      band.position.y = 0.32;
-      g.add(band);
       g.position.set(s.x, 0, s.z);
       scene.add(g);
       const sh = blob(Math.max(s.w, s.d) * 0.62, 0.22);
@@ -128,7 +153,7 @@
       g.add(pole);
       const clothGeo = new T.PlaneGeometry(0.9, 0.6, 8, 1);
       clothGeo.translate(0.45, 0, 0);
-      const cloth = new T.Mesh(clothGeo, lambert(COLORS.team[team], { side: T.DoubleSide }));
+      const cloth = new T.Mesh(clothGeo, applyTex(lambert(COLORS.team[team], { side: T.DoubleSide }), team === 0 ? 'tex_flag_blue.jpg' : 'tex_flag_red.jpg'));
       cloth.position.y = 1.88;
       g.add(cloth);
       const base = new T.Mesh(new T.CylinderGeometry(0.28, 0.32, 0.12, 14), lambert(0x6b7380));
@@ -1191,6 +1216,7 @@
       currentAim,
       pickFrame,
       sprites: () => ({ ready: !!sprites.tex, failed: sprites.failed }),
+      textures: () => ({ loaded: app.tex.loaded, failed: app.tex.failed, names: app.tex.names.slice() }),
       frameOf: (id) => { const v = views.players[id]; return v && v.spr ? Object.assign({ visible: v.spr.mesh.visible }, v.spr.frame) : null; },
       // 選手の絵の板が、画面でどんな形に見えているか (横の辺と縦の辺の長さ、px)
       spriteShape: (id) => {

@@ -527,3 +527,22 @@ test('選手の絵 (players.webp): 8 列 x 6 行・1 コマ 192px。どのコマ
   const idle = frames.filter(([n]) => n.endsWith('#1')).map(([, f]) => f.h);
   assert.ok(Math.max(...idle) - Math.min(...idle) <= 2, `立ちの高さ ${idle}`);
 });
+
+test('地面と壁の絵 (tex_*.jpg) がそろっていて、重すぎない', () => {
+  const fs = require('node:fs');
+  const path = require('node:path');
+  const want = ['ground', 'court', 'shelter_blue', 'shelter_red', 'shelter_center', 'chateau_blue', 'chateau_red', 'walltop', 'flag_blue', 'flag_red'];
+  let total = 0;
+  for (const n of want) {
+    const f = path.join(__dirname, `tex_${n}.jpg`);
+    assert.ok(fs.existsSync(f), `tex_${n}.jpg が無い`);
+    const b = fs.readFileSync(f);
+    assert.ok(b[0] === 0xff && b[1] === 0xd8, `tex_${n}.jpg が JPEG でない`);
+    total += b.length;
+  }
+  assert.ok(total < 300 * 1024, `合計 ${Math.round(total / 1024)}KB`);
+  // app.js が読む名前と、ファイルの名前が合っている
+  const src = fs.readFileSync(path.join(__dirname, 'app.js'), 'utf8');
+  for (const n of ['ground', 'court', 'walltop', 'flag_blue', 'flag_red']) assert.ok(src.includes(`tex_${n}.jpg`), `app.js が tex_${n}.jpg を読んでいない`);
+  assert.ok(src.includes('tex_shelter_${') && src.includes('tex_chateau_${'), 'app.js がシェルター・シャトーの絵を読んでいない');
+});

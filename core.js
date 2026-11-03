@@ -39,11 +39,11 @@
     MIN_RANGE: 1.5,
     SPEED: 4.3,           // 走る速さ
     STAND_AFTER_THROW: 0.45, // 投げたあと立っている時間 (この間は隠れていても当たる)
-    THROW_CD: 0.5,
+    THROW_CD: 0.9,        // 投げたあと構え直す時間。この間は次を投げられず、構えも始まらない (連打できない)
     AIM_STEADY: 0.6,      // 人の構え: 投げるボタンを押さえてから狙いが定まるまで (秒)。走っていると 2 倍かかる
     AIM_SPREAD: 2.4,      // 構えが 0 のとき (すぐ離した) の狙いのぶれ (m、20m 先で)。連打すると当たらない
     MAKE_TIME: 0.6,       // 1 個丸める時間 (0.9 秒では、生きている時間の 6 割が雪玉 0 個だった)
-    MAX_CARRY: 5,
+    MAX_CARRY: 3,         // 一度に持てる数。使い切ったら、しゃがんで丸め直す (その間は攻められない)
     START_CARRY: 3,
     BALLS_PER_SET: 90,    // 公式: 1 セット 90 球
     SET_TIME: 90,         // 公式は 3 分。スマホ向けに短くした
@@ -220,7 +220,7 @@
    * 離せば 0 に戻る。
    */
   function stepAim(p, input, dt) {
-    if (!input.aiming || p.balls <= 0) { p.aimF = 0; return input; }
+    if (!input.aiming || p.balls <= 0 || p.cd > 0) { p.aimF = 0; return input; }   // 構え直している間は 0 から
     const moving = Math.hypot(input.mx || 0, input.mz || 0) > 0.05;
     p.aimF = Math.min(1, p.aimF + dt / (R.AIM_STEADY * (moving ? 2 : 1)));
     return input.crouch ? Object.assign({}, input, { crouch: false }) : input;

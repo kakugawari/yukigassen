@@ -189,7 +189,8 @@ async function run() {
       const m = window.__app.match(), me = window.__app.me();
       me.x = 0; me.z = 6; me.balls = 5;
       m.skill[1] = 0;
-      m.players.filter((p) => p.team === 0 && p !== me).forEach((p) => { p.balls = 0; });
+      // 仲間は投げず、動かない (守りのいないフラッグへ走って、確かめの途中でセットを終わらせないように)
+      m.players.filter((p) => p.team === 0 && p !== me).forEach((p) => { p.balls = 0; p.ai.think = 999; p.ai.goal = null; });
       m.stock[0] = 0;     // 仲間が丸めて当ててしまわないように
       const reds = m.players.filter((p) => p.team === 1);
       reds.forEach((p, i) => { p.alive = i < 2; p.ai.think = 999; p.ai.goal = null; p.balls = 0; });
@@ -224,18 +225,18 @@ async function run() {
     const flewR = lockR.flew;
     ok(lockR && lockR.target === setup.right && lockR.clear, `右前へはじくと右の相手を狙い、当たるコースになる`);
     ok(flewR.length === 1 && flewR[0].vx > 0 && flewR[0].vz < 0, `右前へ飛んでいく`);
-    await phone.waitForTimeout(600);
+    await phone.waitForFunction(() => window.__app.me().cd <= 0, null, { timeout: 3000 });   // 構え直しが終わるまで
     const lockL = await flick(-40, -70);
     ok(lockL && lockL.target === setup.left, '左前へはじくと左の相手を狙う');
     const ballsAfter = await phone.evaluate(() => window.__app.me().balls);
     ok(ballsAfter === ballsBefore - 2, `はじくたびに 1 個投げる (${ballsBefore} → ${ballsAfter})`);
     // だれもいない向き (真後ろ) へはじくと、指の量で地面を狙う
-    await phone.waitForTimeout(600);
+    await phone.waitForFunction(() => window.__app.me().cd <= 0, null, { timeout: 3000 });
     const lockB = await flick(0, 80);
     ok(lockB && lockB.manual && lockB.target == null && lockB.z > 6, `だれもいない向きへはじくと、その向きの地面を狙う (z ${lockB && lockB.z.toFixed(1)})`);
 
     // ---- 構え: 押さえている間に輪が締まり、締まりきると赤。離すと投げて 0 に戻る
-    await phone.waitForTimeout(600);
+    await phone.waitForFunction(() => window.__app.me().cd <= 0, null, { timeout: 3000 });
     await phone.evaluate(() => { const me = window.__app.me(); me.balls = 5; me.cd = 0; window.__app.match().balls = []; });
     await phone.mouse.move(pad.x, pad.y);
     await phone.mouse.down();
@@ -248,7 +249,11 @@ async function run() {
       ready: document.getElementById('throwPad').classList.contains('ready') }));
     await phone.mouse.up();
     await phone.waitForTimeout(60);
-    const h3 = await phone.evaluate(() => { const m = window.__app.match(); const n = m.balls.filter((b) => b.owner === m.human).length; m.balls = []; return { n, f: window.__app.me().aimF }; });
+    const h3 = await phone.evaluate(() => { const m = window.__app.match(); const n = m.balls.filter((b) => b.owner === m.human).length; m.balls = []; return { n, f: window.__app.me().aimF, rec: document.getElementById('throwPad').classList.contains('recover') }; });
+    await phone.waitForFunction(() => window.__app.me().cd <= 0, null, { timeout: 3000 });
+    await phone.waitForTimeout(80);
+    const recEnd = await phone.evaluate(() => document.getElementById('throwPad').classList.contains('recover'));
+    ok(h3.rec && !recEnd, '投げた直後はボタンが沈んで構え直し、終わると戻る');
     ok(h1.aiming && h1.f > 0.05 && h1.f < 0.8 && !h1.ready, `押さえ始めは構えの途中で、まだ赤くない (${h1.f.toFixed(2)})`);
     ok(h2.f === 1 && h2.ready, '押さえ続けると構えが定まり、投げるボタンが赤くなる');
     ok(h1.crouch === false && h2.crouch === false, '構えている間は立つ');

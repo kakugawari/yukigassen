@@ -309,6 +309,16 @@ test('構え: 押さえている間だけ定まり、立つ。離すと 0 に戻
   assert.ok(me.aimF < 1, '走りながらは定まるのが遅い');
   run(m, 0.1, { crouch: true });
   assert.equal(me.aimF, 0, '離すと 0 に戻る');
+  // 投げたあとは構え直し: THROW_CD 秒は投げられず、押さえていても構えが始まらない
+  me.aimF = 1; me.cd = 0;
+  run(m, 1 / 60, { throwAt: { x: me.x, z: me.z - 10 } });
+  assert.equal(me.balls, 1, '1 個投げた');
+  run(m, R.THROW_CD - 0.1, { aiming: true });
+  assert.equal(me.aimF, 0, '構え直している間は構えが 0 のまま');
+  run(m, 1 / 60, { throwAt: { x: me.x, z: me.z - 10 } });
+  assert.equal(me.balls, 1, '構え直している間は投げられない');
+  run(m, 0.2, { aiming: true });
+  assert.ok(me.aimF > 0, '構え直しが終われば構えが始まる');
   // 構えきって投げると、狙ったところにそのまま落ちる
   me.aimF = 1;
   assert.equal(C.aimSpread(me, me.x, me.z - 12), 0);
@@ -454,19 +464,19 @@ test('2 セット先取で試合終了。次のセットは全員そろって始
   assert.deepStrictEqual(m.setWins, [2, 0]);
 });
 
-test('しゃがむと雪玉を丸める。チームの残りから引かれ、5 個まで', () => {
+test('しゃがむと雪玉を丸める。チームの残りから引かれ、持てる数 (3 個) まで', () => {
   const m = playing();
   const p = m.players[0];
   isolate(m, [p.id, 8]);
   m.players[8].x = 4; m.players[8].z = -17; m.players[8].alive = true;
   m.players[8].balls = 0;
-  p.balls = 3;
+  p.balls = R.MAX_CARRY - 2;
   const before = m.stock[0];
   run(m, R.MAKE_TIME * 1.5, { crouch: true });
-  assert.strictEqual(p.balls, 4);
+  assert.strictEqual(p.balls, R.MAX_CARRY - 1);
   assert.strictEqual(m.stock[0], before - 1);
   run(m, R.MAKE_TIME * 5, { crouch: true });
-  assert.strictEqual(p.balls, R.MAX_CARRY);
+  assert.strictEqual(p.balls, R.MAX_CARRY, '持てる数で止まる');
   assert.strictEqual(m.stock[0], before - 2);
   // 残りが 0 なら丸められない
   p.balls = 0; m.stock[0] = 0;
@@ -528,10 +538,10 @@ function autoplay(seed, skill) {
   return { m, reasons, bad };
 }
 
-test('AI どうしで 30 試合: 必ず終わり、壁にめりこまず、フォワードはバックラインより前、相手コートは 3 人まで', () => {
+test('AI どうしで 60 試合: 必ず終わり、壁にめりこまず、フォワードはバックラインより前、相手コートは 3 人まで', () => {
   let w = [0, 0, 0];
   const all = {};
-  for (let seed = 1; seed <= 30; seed++) {
+  for (let seed = 1; seed <= 60; seed++) {
     const { m, reasons, bad } = autoplay(seed, [0.55, 0.55]);
     assert.strictEqual(m.phase, 'matchOver', `seed ${seed} が終わらない`);
     assert.strictEqual(bad, 0, `seed ${seed}: おかしな位置 ${bad} 回`);
@@ -539,7 +549,8 @@ test('AI どうしで 30 試合: 必ず終わり、壁にめりこまず、フ�
     for (const k in reasons) all[k] = (all[k] || 0) + reasons[k];
   }
   // 同じ強さなら、どちらの陣地でも勝てる (向きの違いで偏らない)
-  assert.ok(w[0] >= 8 && w[1] >= 8, `勝ち数 あお${w[0]} あか${w[1]} 分${w[2]}`);
+  // 30 試合では振れが大きすぎた (1〜30 で 23:7、31〜60 で 16:14、100〜199 で 47:53)。60 試合で期待 30・3 標準偏差 = 18
+  assert.ok(w[0] >= 18 && w[1] >= 18, `勝ち数 あお${w[0]} あか${w[1]} 分${w[2]}`);
   assert.ok(all.allout > 0 && all.time > 0, JSON.stringify(all));
   assert.ok(!all.over, `AI が 4 人目の反則をした: ${JSON.stringify(all)}`);
 });

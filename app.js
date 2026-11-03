@@ -7,7 +7,7 @@
   const C = window.Core;
   const R = C.R;
   const T = window.THREE;
-  const VERSION = 'v7';
+  const VERSION = 'v8';
   const AUTO_CROUCH = 0.2;   // 止まってからしゃがむまで (秒)
   // カメラ: 自分の (h) 上・(back) 後ろから、(ahead) 先の地面を見る
   // ahead は 5 → 7: 5 だとスタート地点から相手のシェルター・バックラインが上の帯の下に隠れ、
@@ -1127,9 +1127,13 @@
     const empty = balls === 0;
     if (app.hud.empty !== empty) { app.hud.empty = empty; els.throwPad.classList.toggle('empty', empty); }
     // 丸めている進み具合 (12段階に丸める。細かく書き換えると遅い端末でカクつく)
-    const aiming = !!(p && app.aim && app.match.phase === 'play');
+    // 投げた直後は構え直し (ボタンが沈み、ふちが灰色で戻っていく)
+    const recover = !!(p && p.cd > 0 && balls > 0 && app.match.phase === 'play');
+    if (app.hud.recover !== recover) { app.hud.recover = recover; els.throwPad.classList.toggle('recover', recover); }
+    const aiming = !!(p && app.aim && app.match.phase === 'play') && !recover;
     if (app.hud.aiming !== aiming) { app.hud.aiming = aiming; els.throwPad.classList.toggle('aiming', aiming); }
-    const prog = aiming ? Math.round(p.aimF * 12) / 12
+    const prog = recover ? Math.round((1 - p.cd / R.THROW_CD) * 12) / 12
+      : aiming ? Math.round(p.aimF * 12) / 12
       : p && p.makeT > 0 ? Math.round(p.makeT / R.MAKE_TIME * 12) / 12 : 0;
     if (app.hud.prog !== prog) { app.hud.prog = prog; els.makeRing.style.setProperty('--p', prog); }
   }

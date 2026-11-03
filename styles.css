@@ -186,6 +186,8 @@ button { font: inherit; color: inherit; cursor: pointer; }
 /* 押さえている間は、ふちが構えの進み具合 (締まりきると投げどき) */
 .throw.aiming .ring { background: conic-gradient(#ff7a1f calc(var(--p, 0) * 1turn), transparent 0); }
 .throw.aiming.ready .ring { background: conic-gradient(#ff3b30 1turn, transparent 0); }
+.throw.recover { filter: saturate(.4) brightness(.9); }
+.throw.recover .ring { background: conic-gradient(#9aa6b8 calc(var(--p, 0) * 1turn), transparent 0); }
 .throw {
   right: 22px;
   bottom: calc(env(safe-area-inset-bottom) + 70px);

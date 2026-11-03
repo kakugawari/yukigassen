@@ -1,0 +1,227 @@
+{
+ "cell": 192,
+ "base": 184,
+ "scale": {
+  "player_back.png": 0.3906,
+  "player_front.png": 0.4132,
+  "player_side.png": 0.3659
+ },
+ "frames": {
+  "player_back.png#1": {
+   "bbox": [
+    58,
+    34,
+    133,
+    184
+   ],
+   "h": 150
+  },
+  "player_back.png#2": {
+   "bbox": [
+    48,
+    31,
+    135,
+    184
+   ],
+   "h": 153
+  },
+  "player_back.png#3": {
+   "bbox": [
+    47,
+    43,
+    137,
+    184
+   ],
+   "h": 141
+  },
+  "player_back.png#4": {
+   "bbox": [
+    45,
+    25,
+    142,
+    184
+   ],
+   "h": 159
+  },
+  "player_back.png#5": {
+   "bbox": [
+    56,
+    76,
+    138,
+    184
+   ],
+   "h": 108
+  },
+  "player_back.png#6": {
+   "bbox": [
+    58,
+    77,
+    139,
+    184
+   ],
+   "h": 107
+  },
+  "player_back.png#7": {
+   "bbox": [
+    31,
+    54,
+    140,
+    184
+   ],
+   "h": 130
+  },
+  "player_back.png#8": {
+   "bbox": [
+    49,
+    33,
+    155,
+    184
+   ],
+   "h": 151
+  },
+  "player_front.png#1": {
+   "bbox": [
+    50,
+    34,
+    141,
+    184
+   ],
+   "h": 150
+  },
+  "player_front.png#2": {
+   "bbox": [
+    49,
+    22,
+    146,
+    184
+   ],
+   "h": 162
+  },
+  "player_front.png#3": {
+   "bbox": [
+    49,
+    36,
+    140,
+    184
+   ],
+   "h": 148
+  },
+  "player_front.png#4": {
+   "bbox": [
+    48,
+    21,
+    146,
+    184
+   ],
+   "h": 163
+  },
+  "player_front.png#5": {
+   "bbox": [
+    48,
+    80,
+    138,
+    184
+   ],
+   "h": 104
+  },
+  "player_front.png#6": {
+   "bbox": [
+    51,
+    72,
+    141,
+    184
+   ],
+   "h": 112
+  },
+  "player_front.png#7": {
+   "bbox": [
+    46,
+    44,
+    164,
+    185
+   ],
+   "h": 141
+  },
+  "player_front.png#8": {
+   "bbox": [
+    58,
+    15,
+    158,
+    184
+   ],
+   "h": 169
+  },
+  "player_side.png#1": {
+   "bbox": [
+    59,
+    34,
+    134,
+    184
+   ],
+   "h": 150
+  },
+  "player_side.png#2": {
+   "bbox": [
+    49,
+    31,
+    136,
+    183
+   ],
+   "h": 152
+  },
+  "player_side.png#3": {
+   "bbox": [
+    54,
+    57,
+    133,
+    184
+   ],
+   "h": 127
+  },
+  "player_side.png#4": {
+   "bbox": [
+    45,
+    27,
+    141,
+    183
+   ],
+   "h": 156
+  },
+  "player_side.png#5": {
+   "bbox": [
+    50,
+    91,
+    139,
+    184
+   ],
+   "h": 93
+  },
+  "player_side.png#6": {
+   "bbox": [
+    53,
+    84,
+    138,
+    184
+   ],
+   "h": 100
+  },
+  "player_side.png#7": {
+   "bbox": [
+    45,
+    51,
+    162,
+    184
+   ],
+   "h": 133
+  },
+  "player_side.png#8": {
+   "bbox": [
+    42,
+    32,
+    153,
+    184
+   ],
+   "h": 152
+  }
+ }
+}

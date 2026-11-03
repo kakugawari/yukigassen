@@ -443,6 +443,62 @@ async function run() {
     await phone.evaluate(() => { delete document.hidden; });
     await phone.click('#btnResume');
 
+    // ------------------------------------------------ 選手の絵
+    section('選手の絵');
+    await phone.waitForFunction(() => window.__app.sprites().ready, null, { timeout: 10000 });
+    await phone.waitForFunction(() => window.__app.match().phase === 'play', null, { timeout: 15000 });
+    // 向きと動きで、どのコマを出すか
+    const pf = await phone.evaluate(() => {
+      const f = window.__app.pickFrame;
+      const base = { camSign: 1, team: 0, throwT: 0, crouch: false, making: false, speed: 0, step: 0, t: 0 };
+      return {
+        away: f(Object.assign({}, base, { face: Math.PI })),                 // -z へ向く = カメラから遠ざかる
+        toward: f(Object.assign({}, base, { face: 0, team: 1 })),             // あかが +z へ向く = こちらを向く
+        right: f(Object.assign({}, base, { face: Math.PI / 2 })),
+        left: f(Object.assign({}, base, { face: -Math.PI / 2 })),
+        run: [0, 1, 2, 3].map((k) => f(Object.assign({}, base, { face: Math.PI, speed: 4, step: k * Math.PI / 2 + 0.1 })).col),
+        crouch: f(Object.assign({}, base, { face: Math.PI, crouch: true })).col,
+        windup: f(Object.assign({}, base, { face: Math.PI, throwT: 0.3 })).col,
+        release: f(Object.assign({}, base, { face: Math.PI, throwT: 0.1 })).col,
+        vtRed: f(Object.assign({}, base, { face: 0, team: 1, camSign: -1 })).row   // ビクトリースローのあかの番: +z へ投げる選手を、-z 側のカメラから見る
+      };
+    });
+    ok(pf.away.row === 0 && pf.toward.row === 4, `遠ざかる向きは背中 (行 ${pf.away.row})、こちらを向くあかは正面 (行 ${pf.toward.row})`);
+    ok(pf.right.row === 2 && !pf.right.flip && pf.left.row === 2 && pf.left.flip, '横向きは右がそのまま、左は反転');
+    ok(pf.run.join() === '1,2,3,2' && pf.crouch === 4 && pf.windup === 6 && pf.release === 7, `走る ${pf.run} / しゃがむ ${pf.crouch} / 振りかぶり ${pf.windup} / 振り抜き ${pf.release}`);
+    ok(pf.vtRed === 3, 'カメラが反対側から見ると、あかの背中になる');
+    // 実際の試合で: 自分を前へ走らせると背中の走る絵、止まるとしゃがむ絵
+    // だれも雪玉を持たない (走っている最中に当てられて、投げたばかりの仲間に交代すると、投げる絵になる)
+    await phone.evaluate(() => {
+      const m = window.__app.match(), me = window.__app.me();
+      m.players.forEach((p) => { if (p !== me) p.balls = 0; });
+      m.balls = []; m.stock = [0, 0];
+      me.x = 0; me.z = 9;
+    });
+    await phone.waitForTimeout(500);   // 直前に投げた絵 (0.35 秒) が終わるのを待つ
+    await phone.mouse.move(100, 780); await phone.mouse.down(); await phone.mouse.move(100, 720, { steps: 3 });
+    await phone.waitForTimeout(400);
+    const runF = await phone.evaluate(() => window.__app.frameOf(window.__app.me().id));
+    await phone.mouse.up();
+    await phone.waitForTimeout(700);
+    const stopF = await phone.evaluate(() => window.__app.frameOf(window.__app.me().id));
+    ok(runF && runF.visible && runF.row === 0 && [1, 2, 3].includes(runF.col), `前へ走ると背中の走る絵 (行 ${runF && runF.row} 列 ${runF && runF.col})`);
+    ok(stopF && [4, 5].includes(stopF.col), `止まるとしゃがむ絵 (列 ${stopF && stopF.col})`);
+
+    // 絵が読めないときは、今までの 3D の体のまま遊べる
+    const noImg = await browser.newContext({ ...base, viewport: { width: 430, height: 932 }, deviceScaleFactor: 1 });
+    const np = await noImg.newPage();
+    np.on('pageerror', (e) => errors.push('絵なし: ' + e.message));
+    await np.route('**/players.webp', (r) => r.abort());
+    await np.goto(URL);
+    await np.waitForFunction(() => window.__app && window.__app.sprites().failed, null, { timeout: 10000 });
+    await np.click('#btnStart');
+    await np.waitForTimeout(300);
+    const fb = await np.evaluate(() => ({ frame: window.__app.frameOf(1), started: !document.getElementById('vTitle').hidden === false }));
+    ok(fb.frame === null && fb.started, '絵が読めなくても、3D の体で試合が始まる');
+    await noImg.close();
+    await phone.bringToFront();
+
     // ------------------------------------------------ 遅い端末
     section('遅い端末 (CPU 4 倍遅)');
     const cdp = await context.newCDPSession(phone);

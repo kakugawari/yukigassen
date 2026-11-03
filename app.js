@@ -7,7 +7,7 @@
   const C = window.Core;
   const R = C.R;
   const T = window.THREE;
-  const VERSION = 'v3';
+  const VERSION = 'v4';
   const AUTO_CROUCH = 0.2;   // 止まってからしゃがむまで (秒)
 
   const $ = (id) => document.getElementById(id);
@@ -235,7 +235,15 @@
     pose.add(shoulder2);
     scene.add(root);
     const shadow = blob(0.42, 0.9);
-    return { root, pose, shoulder, shoulder2, hand, shadow, crouch: 0, throwT: 0, outT: -1, step: 0, mats };
+    // バックスの印: 足もとの白い輪
+    let mark = null;
+    if (p.role === 'B') {
+      mark = new T.Mesh(backMarkGeo, backMarkMat);
+      mark.rotation.x = -Math.PI / 2;
+      mark.renderOrder = 1;
+      scene.add(mark);
+    }
+    return { root, pose, shoulder, shoulder2, hand, shadow, mark, team, crouch: 0, throwT: 0, outT: -1, step: 0, mats };
   }
 
   const views = { players: [], balls: new Map(), puffs: [] };
@@ -248,9 +256,90 @@
   meArrow.rotation.x = Math.PI;
   scene.add(meArrow);
 
+  // ------------------------------------------------------------ 選手の絵 (players.webp)
+  // art/make_sprites.py が作る 8 列 x 6 行の絵。行: あお 背中・正面・横 / あか 背中・正面・横。
+  // 列: 0 立つ 1〜3 走る 4 しゃがむ 5 丸める 6 振りかぶり 7 振り抜き。
+  // 絵は上から見下ろした形で描いてあるので、板は「縦に立てて、カメラの方へ向ける」。
+  // 寝かせると (ふつうのスプライト) 板が後ろの壁にめりこみ、壁の手前にいる選手の頭が欠ける。
+  // 縦の板は見下ろすと縮んで見えるので、そのぶん縦に伸ばしておく。
+  const SPR = { cols: 8, rows: 6, cell: 192, base: 184, figure: 150 };
+  const CAM_PITCH = Math.atan2(21, 15);            // camTarget の見下ろす角度 (約 55°)
+  const SPR_W = 1.6;                               // 1 コマの横幅 (m)。立った姿が 1.25m ほどに見える
+  const SPR_H = SPR_W / Math.cos(CAM_PITCH);       // 縦に立てた板の高さ
+  const sprGeo = new T.PlaneGeometry(SPR_W, SPR_H);
+  sprGeo.translate(0, SPR_H / 2 - (SPR.cell - SPR.base) / SPR.cell * SPR_H, 0);   // 足もとを原点に
+  const sprites = { tex: null, failed: false };
+  const backMarkGeo = new T.RingGeometry(0.34, 0.42, 24);
+  const backMarkMat = new T.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.85, depthWrite: false });
+
+  function loadSprites() {
+    const url = (window.ASSETS && window.ASSETS['players.webp']) || './players.webp';
+    new T.TextureLoader().load(url, (tex) => {
+      tex.colorSpace = T.SRGBColorSpace;
+      tex.anisotropy = 4;
+      sprites.tex = tex;
+      if (app.match) app.match.players.forEach((p, i) => { if (views.players[i]) attachSprite(views.players[i]); });
+    }, undefined, () => { sprites.failed = true; });   // 読めなければ、今までの 3D の体のまま
+  }
+
+  function attachSprite(v) {
+    if (!sprites.tex || v.spr) return;
+    const geo = sprGeo.clone();
+    const mat = new T.MeshBasicMaterial({ map: sprites.tex, transparent: true, alphaTest: 0.25 });
+    const mesh = new T.Mesh(geo, mat);
+    mesh.renderOrder = 3;
+    scene.add(mesh);
+    v.spr = { mesh, key: -1 };
+    v.pose.visible = false;
+  }
+
+  /**
+   * どの絵を出すか。向き (カメラから見て 背中・正面・横) と動きで決める。
+   * @param face   選手の向き (Core の face。0 = +z)
+   * @param camSign カメラが +z 側から見ているなら 1、反対側 (ビクトリースローのあかの番) なら -1
+   */
+  function pickFrame(o) {
+    const away = -Math.cos(o.face) * o.camSign;       // カメラから遠ざかる向きほど +
+    const right = Math.sin(o.face) * o.camSign;       // 画面の右を向くほど +
+    let row, flip = false;
+    if (away > 0.45) row = 0;
+    else if (away < -0.45) row = 1;
+    else { row = 2; flip = right < 0; }
+    let col = 0;
+    if (o.throwT > 0) col = o.throwT > 0.23 ? 6 : 7;
+    else if (o.crouch) col = o.making ? (Math.floor(o.t * 6) % 2 ? 5 : 4) : 4;
+    else if (o.speed > 0.3) col = [1, 2, 3, 2][Math.floor(o.step / (Math.PI / 2)) % 4];
+    return { row: row + (o.team === 1 ? 3 : 0), col, flip };
+  }
+
+  function setFrame(v, f) {
+    const key = f.row * 32 + f.col * 2 + (f.flip ? 1 : 0);
+    if (v.spr.key === key) return;
+    v.spr.key = key;
+    v.spr.frame = f;
+    const u0 = f.col / SPR.cols, u1 = (f.col + 1) / SPR.cols;
+    const vt = 1 - f.row / SPR.rows, vb = 1 - (f.row + 1) / SPR.rows;
+    const a = f.flip ? u1 : u0, b = f.flip ? u0 : u1;
+    const uv = v.spr.mesh.geometry.attributes.uv;
+    uv.setXY(0, a, vt); uv.setXY(1, b, vt); uv.setXY(2, a, vb); uv.setXY(3, b, vb);
+    uv.needsUpdate = true;
+  }
+
+  /** 頭の上の印を出す高さ */
+  function headTop(p) {
+    const crouched = C.playerHeight(p) < R.STAND_H;
+    if (sprites.tex) return crouched ? 1.75 : 2.4;
+    return C.playerHeight(p) + 0.6;
+  }
+
   function resetPlayers() {
-    for (const v of views.players) { scene.remove(v.root); scene.remove(v.shadow); }
+    for (const v of views.players) {
+      scene.remove(v.root); scene.remove(v.shadow);
+      if (v.spr) { scene.remove(v.spr.mesh); v.spr.mesh.geometry.dispose(); v.spr.mesh.material.dispose(); }
+      if (v.mark) scene.remove(v.mark);
+    }
     views.players = app.match.players.map(makePlayerMesh);
+    views.players.forEach(attachSprite);
     for (const [, b] of views.balls) { scene.remove(b.mesh); scene.remove(b.shadow); }
     views.balls.clear();
   }
@@ -380,7 +469,7 @@
       lockRing.scale.set(s, s, 1);
       lockMark.visible = true;
       lockMark.material.color.setHex(col);
-      lockMark.position.set(q.x, C.playerHeight(q) + 0.7 + Math.sin(performance.now() / 160) * 0.08, q.z);
+      lockMark.position.set(q.x, headTop(q) + 0.15 + Math.sin(performance.now() / 160) * 0.08, q.z);
       lockMark.rotation.y = performance.now() / 400;
     } else if (aim && app.match.phase === 'vt' && aim.clear) {
       const f = C.flagPos(1 - p.team);
@@ -767,6 +856,14 @@
           v.root.visible = k > 0;
           v.shadow.visible = k > 0;
           v.root.scale.setScalar(0.4 + 0.6 * k);
+          if (v.mark) v.mark.visible = false;
+          if (v.spr) {
+            const sm = v.spr.mesh;
+            sm.visible = k > 0;
+            sm.position.copy(v.root.position);
+            sm.rotation.set(0, Math.atan2(camera.position.x - sm.position.x, camera.position.z - sm.position.z), Math.min(1, v.outT * 4) * (v.kb && v.kb.x < 0 ? 1.3 : -1.3));
+            sm.material.opacity = k;
+          }
           continue;
         }
         v.root.visible = true; v.shadow.visible = true; v.root.scale.setScalar(1);
@@ -799,6 +896,18 @@
         }
         v.hand.visible = p.balls > 0;
         v.shadow.position.set(p.x, 0.014, p.z);
+        if (v.mark) { v.mark.visible = true; v.mark.position.set(p.x, 0.018, p.z); }
+        if (v.spr) {
+          const sm = v.spr.mesh;
+          sm.visible = true;
+          sm.material.opacity = 1;
+          sm.position.set(p.x, v.root.position.y, p.z);
+          sm.rotation.set(0, Math.atan2(camera.position.x - p.x, camera.position.z - p.z), 0);
+          setFrame(v, pickFrame({
+            face: v.root.rotation.y, camSign: camera.position.z >= camLook.z ? 1 : -1, team: p.team,
+            throwT: v.throwT, crouch: v.crouch > 0.5, making: p.makeT > 0, speed: sp, step: v.step, t
+          }));
+        }
       }
 
       // 球
@@ -823,7 +932,7 @@
       if (mine && mine.alive) {
         meRing.visible = true; meArrow.visible = true;
         meRing.position.set(mine.x, 0.02, mine.z);
-        meArrow.position.set(mine.x, 2.25 + Math.sin(t * 5) * 0.08, mine.z);
+        meArrow.position.set(mine.x, headTop(mine) + 0.1 + Math.sin(t * 5) * 0.08, mine.z);
       } else { meRing.visible = false; meArrow.visible = false; }
 
       // カメラ: 自分を追う (斜め上から)
@@ -1002,6 +1111,7 @@
 
   function main() {
     buildField();
+    loadSprites();
     bindControls();
     document.querySelectorAll('.diff button').forEach((b) => {
       b.addEventListener('click', () => {
@@ -1056,6 +1166,9 @@
       },
       aimTarget,
       currentAim,
+      pickFrame,
+      sprites: () => ({ ready: !!sprites.tex, failed: sprites.failed }),
+      frameOf: (id) => { const v = views.players[id]; return v && v.spr ? Object.assign({ visible: v.spr.mesh.visible }, v.spr.frame) : null; },
       frames: () => app.frames,
       info: () => ({ calls: renderer.info.render.calls, tris: renderer.info.render.triangles, pr: renderer.getPixelRatio() })
     };

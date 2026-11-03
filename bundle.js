@@ -11,6 +11,12 @@ let html = read('index.html');
 const safe = (js) => js.replace(/<\/script/gi, '<\\/script');
 html = html.replace('<link rel="stylesheet" href="./styles.css">', () => `<style>\n${read('styles.css')}\n</style>`);
 html = html.replace(/<link rel="icon"[^>]*>\n?/, '');
+// 絵は data: URI にして埋め込む (app.js は window.ASSETS があればそちらを読む)
+const assets = {};
+for (const f of ['players.webp']) {
+  assets[f] = 'data:image/webp;base64,' + fs.readFileSync(path.join(ROOT, f)).toString('base64');
+}
+html = html.replace('<script src="./core.js"></script>', () => `<script>window.ASSETS = ${JSON.stringify(assets)};</script>\n<script src="./core.js"></script>`);
 for (const f of ['three.min.js', 'core.js', 'app.js']) {
   html = html.replace(`<script src="./${f}"></script>`, () => `<script>\n${safe(read(f))}\n</script>`);
 }

@@ -503,3 +503,27 @@ test('強い AI は弱い AI によく勝つ', () => {
   }
   assert.ok(strong > weak * 2, `強い${strong} 弱い${weak}`);
 });
+
+test('選手の絵 (players.webp): 8 列 x 6 行・1 コマ 192px。どのコマも足もとが同じ線で、はみ出していない', () => {
+  const fs = require('node:fs');
+  const path = require('node:path');
+  const buf = fs.readFileSync(path.join(__dirname, 'players.webp'));
+  assert.strictEqual(buf.toString('ascii', 0, 4), 'RIFF');
+  assert.strictEqual(buf.toString('ascii', 8, 12), 'WEBP');
+  // 透明つきの WebP は VP8X の塊に全体の大きさを持つ
+  assert.strictEqual(buf.toString('ascii', 12, 16), 'VP8X');
+  const w = 1 + buf.readUIntLE(24, 3), h = 1 + buf.readUIntLE(27, 3);
+  assert.deepStrictEqual([w, h], [192 * 8, 192 * 6]);
+  assert.ok(buf.length < 400 * 1024, `大きさ ${Math.round(buf.length / 1024)}KB`);
+  const rep = JSON.parse(fs.readFileSync(path.join(__dirname, 'art', 'sprites_report.json'), 'utf8'));
+  const frames = Object.entries(rep.frames);
+  assert.strictEqual(frames.length, 24);
+  for (const [name, f] of frames) {
+    const [x0, y0, x1, y1] = f.bbox;
+    assert.ok(x0 > 0 && y0 > 0 && x1 < rep.cell, `${name} がはみ出している ${f.bbox}`);
+    assert.ok(Math.abs(y1 - rep.base) <= 1, `${name} の足もと ${y1} (線は ${rep.base})`);
+  }
+  // 立ち (1 コマ目) はどの向きでも同じ高さ (向きを変えても大きさが変わらない)
+  const idle = frames.filter(([n]) => n.endsWith('#1')).map(([, f]) => f.h);
+  assert.ok(Math.max(...idle) - Math.min(...idle) <= 2, `立ちの高さ ${idle}`);
+});

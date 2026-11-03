@@ -326,6 +326,43 @@ test('構え: 押さえている間だけ定まり、立つ。離すと 0 に戻
   assert.ok(C.aimSpread(me, me.x, me.z - 12) > 1.2, 'すぐ離すと 1m 以上ぶれる');
 });
 
+test('かんたん: 押してすぐ投げても当たり、玉が向きを変えた相手を追う', () => {
+  // 相手は 13m 先を横へ走り、投げた直後に折り返す (先読みした所にはもういない)
+  function shoot(mode, k) {
+    const m = playing({ human: 1, aimMode: mode, seed: 300 + k });
+    isolate(m, [1, 7]);
+    const me = m.players[1], q = m.players[7];
+    me.x = 0; me.z = 7; me.balls = 1; me.cd = 0;
+    q.x = -2 + (k % 5) * 0.8; q.z = -6; q.standT = 99;
+    q.ai.think = 999; q.ai.seen = new Proxy({}, { get: () => true });
+    let dir = k % 2 ? 1 : -1;
+    q.vx = dir * R.SPEED; q.vz = 0;
+    const aim = C.assistAim(m, me, null, q);
+    C.step(m, 1 / 60, { throwAt: { x: aim.x, z: aim.z, target: q.id } });   // 押してすぐ離す (構えなし)
+    const ball = m.balls[0];
+    for (let i = 0; i < 120 && q.alive; i++) {
+      if (i === 12) dir = -dir;                                           // 0.2 秒で折り返す
+      q.x = Math.max(-4.6, Math.min(4.6, q.x + dir * R.SPEED / 60)); q.vx = dir * R.SPEED;
+      C.step(m, 1 / 60, { crouch: true });
+    }
+    return { hit: !q.alive, home: ball && ball.home };
+  }
+  let easy = 0, hard = 0, homeId = null;
+  for (let k = 0; k < 20; k++) {
+    const e = shoot('easy', k); if (e.hit) easy++; if (k === 0) homeId = e.home;
+    if (shoot('hard', k).hit) hard++;
+  }
+  assert.equal(homeId, 7, '玉は狙った相手を覚えている');
+  assert.ok(easy >= 14, `かんたん: 折り返した相手に ${easy}/20`);
+  assert.ok(hard <= 4, `むずかしい (すぐ離す): ${hard}/20`);
+  // AI の玉は曲がらない
+  const m = playing({ human: 1, aimMode: 'easy' });
+  const ai = m.players[8];
+  ai.balls = 1; ai.cd = 0;
+  const b = C.throwBall(m, ai, 0, 5, 1);
+  assert.equal(b.home, null, 'AI の玉は追わない');
+});
+
 test('フラッグはバックスが抜いてもよい', () => {
   const m = playing({ human: null });
   m.players.forEach((p) => { p.balls = 0; });

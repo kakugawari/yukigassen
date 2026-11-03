@@ -62,10 +62,9 @@
     <div class="title-card">
       <h1><span>雪合戦</span><b>フラッグ7</b></h1>
       <p class="tag">7対7 ・ 2セット先取 ・ 当たったら退場</p>
-      <div class="diff" role="group" aria-label="相手の強さ">
-        <button type="button" data-diff="0.15">かんたん</button>
-        <button type="button" data-diff="0.5" class="on">ふつう</button>
-        <button type="button" data-diff="0.85">つよい</button>
+      <div class="diff" role="group" aria-label="投げ方">
+        <button type="button" data-mode="easy" class="on">かんたん<small>押すとすぐ投げる・玉が追う</small></button>
+        <button type="button" data-mode="hard">むずかしい<small>押さえて構え、離して投げる</small></button>
       </div>
       <button type="button" class="btn-start" id="btnStart">試合開始</button>
       <details class="rules">
@@ -81,7 +80,7 @@
           <li>投げたあとは<b>構え直し</b>(約1秒)。続けては投げられない</li>
           <li>シェルターの陰でしゃがめば当たらない。構えている間と投げた直後は頭が出る</li>
         </ul>
-        <p class="how">左側をなぞって移動。右下の<b>投げる</b>を<b>押さえて構え、離すと投げる</b>。押さえている間は相手の足もとの輪が締まっていき、<b>締まりきって赤</b>になったら投げどき(すぐ離すと狙いがぶれる)。構えている間は立つので、相手からも狙われる。押さえたまま<b>相手の方へずらす</b>と、その相手を狙う。灰色の輪は壁に隠れている。動きの先読みも、壁越しの山なりも自動。</p>
+        <p class="how">左側をなぞって移動。右下の<b>投げる</b>で、足もとに輪が出ている相手へ投げる。輪が<b>赤</b>なら当たるコース(灰色は壁に隠れている)。押したまま<b>相手の方へずらす</b>と、その相手を狙う。動きの先読みも、壁越しの山なりも自動。<br><b>かんたん</b>: 押すとすぐ投げ、玉が相手へ曲がっていく。<br><b>むずかしい</b>: 押さえている間に輪が締まり、<b>締まりきって赤</b>で離すと当たる(すぐ離すとぶれる)。構えている間は立つので、相手からも狙われる。</p>
       </details>
     </div>
   </section>

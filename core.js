@@ -42,6 +42,7 @@
     THROW_CD: 0.9,        // 投げたあと構え直す時間。この間は次を投げられず、構えも始まらない (連打できない)
     AIM_STEADY: 0.6,      // 人の構え: 投げるボタンを押さえてから狙いが定まるまで (秒)。走っていると 2 倍かかる
     AIM_SPREAD: 2.4,      // 構えが 0 のとき (すぐ離した) の狙いのぶれ (m、20m 先で)。連打すると当たらない
+    HOMING_TURN: 2.0,     // かんたん: 人の玉が相手へ曲がる速さ (rad/s、水平だけ)
     MAKE_TIME: 0.6,       // 1 個丸める時間 (0.9 秒では、生きている時間の 6 割が雪玉 0 個だった)
     MAX_CARRY: 3,         // 一度に持てる数。使い切ったら、しゃがんで丸め直す (その間は攻められない)
     START_CARRY: 3,
@@ -120,6 +121,7 @@
   /**
    * @param {object} opt
    *   seed, setTime, skill: [チーム0のAI, チーム1のAI] (0〜1), human: 操作する選手の id (null なら全員 AI)
+   *   aimMode: 人の投げ方。'easy' = 押したらすぐ投げ、玉が相手へ曲がっていく / 'hard' = 押さえて構え、離して投げる
    */
   function createMatch(opt) {
     opt = opt || {};
@@ -129,6 +131,7 @@
       setTime: opt.setTime || R.SET_TIME,
       skill: opt.skill || [0.55, 0.55],
       human: opt.human === undefined ? 0 : opt.human,
+      aimMode: opt.aimMode === 'easy' ? 'easy' : 'hard',
       setNo: 0,
       setWins: [0, 0],
       setResults: [],      // { winner: 0|1|-1, reason, alive, points }
@@ -219,16 +222,18 @@
    * 止まっていれば AIM_STEADY 秒、走っていればその倍。構えている間は立つ (隠れていても当たる)。
    * 離せば 0 に戻る。
    */
-  function stepAim(p, input, dt) {
+  function stepAim(m, p, input, dt) {
+    if (m.aimMode === 'easy') { p.aimF = 1; return input; }    // かんたん: 構えは要らない (いつも定まっている)
     if (!input.aiming || p.balls <= 0 || p.cd > 0) { p.aimF = 0; return input; }   // 構え直している間は 0 から
     const moving = Math.hypot(input.mx || 0, input.mz || 0) > 0.05;
     p.aimF = Math.min(1, p.aimF + dt / (R.AIM_STEADY * (moving ? 2 : 1)));
     return input.crouch ? Object.assign({}, input, { crouch: false }) : input;
   }
 
-  function throwBall(m, p, tx, tz) {
+  function throwBall(m, p, tx, tz, target) {
     if (!canThrow(p) || m.phase !== 'play') return null;
-    if (isHuman(m, p)) {
+    const human = isHuman(m, p);
+    if (human && m.aimMode !== 'easy') {
       const e = aimSpread(p, tx, tz);
       if (e > 0) { tx += gauss(m.rng) * e; tz += gauss(m.rng) * e; }
       p.aimF = 0;
@@ -237,7 +242,9 @@
     const b = {
       id: m.nextBallId++, team: p.team, owner: p.id,
       x: p.x + L.ux * (R.PLAYER_R + 0.05), z: p.z + L.uz * (R.PLAYER_R + 0.05), y: R.THROW_Y,
-      vx: L.vx, vy: L.vy, vz: L.vz, age: 0
+      vx: L.vx, vy: L.vy, vz: L.vz, age: 0,
+      // かんたん: 狙った相手へ曲がっていく (ビクトリースローは除く)
+      home: human && m.aimMode === 'easy' && target != null && m.phase === 'play' && !m.vt ? target : null
     };
     m.balls.push(b);
     p.balls--;
@@ -291,9 +298,30 @@
     return { points: pts, end: pts[pts.length - 1], hit: hit ? hit.kind : null, launch: L };
   }
 
+  /**
+   * かんたんの玉: 狙った相手がいま走っている先へ、水平の向きだけを少しずつ曲げる。
+   * 水平の速さは変えないので、落ちる時刻 (山なり) は投げたときのまま。
+   */
+  function homeBall(m, b, dt) {
+    const q = m.players[b.home];
+    if (!q || !q.alive) { b.home = null; return; }
+    const sp = Math.hypot(b.vx, b.vz);
+    const d = Math.hypot(q.x - b.x, q.z - b.z);
+    if (sp < 1e-6 || d < 0.3) return;
+    const t = d / sp;
+    const gx = q.x + q.vx * t - b.x, gz = q.z + q.vz * t - b.z;
+    let da = Math.atan2(gx, gz) - Math.atan2(b.vx, b.vz);
+    while (da > Math.PI) da -= 2 * Math.PI;
+    while (da < -Math.PI) da += 2 * Math.PI;
+    if (Math.abs(da) > Math.PI / 2) { b.home = null; return; }   // 追い越したら曲げない
+    const a = Math.atan2(b.vx, b.vz) + clamp(da, -R.HOMING_TURN * dt, R.HOMING_TURN * dt);
+    b.vx = Math.sin(a) * sp; b.vz = Math.cos(a) * sp;
+  }
+
   function stepBalls(m, dt) {
     const keep = [];
     for (const b of m.balls) {
+      if (b.home != null) homeBall(m, b, dt);
       const speed = Math.hypot(b.vx, b.vy, b.vz);
       const n = Math.max(1, Math.ceil(speed * dt / 0.07));
       const h = dt / n;
@@ -978,10 +1006,10 @@
       let inp = isHuman(m, p) ? (input || {}) : aiInput(m, p, dt);
       if (isHuman(m, p)) {
         const thr = inp.throwAt;     // 離した瞬間に投げる: そのコマまでの構えで決まる
-        inp = stepAim(p, thr ? Object.assign({}, inp, { aiming: true }) : inp, thr ? 0 : dt);
+        inp = stepAim(m, p, thr ? Object.assign({}, inp, { aiming: true }) : inp, thr ? 0 : dt);
       }
       movePlayer(p, inp, dt);
-      if (inp.throwAt) throwBall(m, p, inp.throwAt.x, inp.throwAt.z);
+      if (inp.throwAt) throwBall(m, p, inp.throwAt.x, inp.throwAt.z, inp.throwAt.target);
       makeBalls(m, p, dt);
     }
     separate(m.players);

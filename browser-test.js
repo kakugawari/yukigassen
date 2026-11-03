@@ -120,7 +120,12 @@ async function run() {
 
     // ------------------------------------------------ 試合を始める
     section('試合');
+    const modes = await phone.evaluate(() => [...document.querySelectorAll('.diff button')].map((b) => ({ mode: b.dataset.mode, on: b.classList.contains('on') })));
+    ok(modes.length === 2 && modes[0].mode === 'easy' && modes[0].on && !modes[1].on, `投げ方は 2 つで、はじめは かんたん (${JSON.stringify(modes)})`);
+    // ここから先の操作の確かめは むずかしい (押さえて構える) で行う。かんたんは下で別に確かめる
+    await phone.click('.diff button[data-mode="hard"]');
     await phone.click('#btnStart');
+    ok(await phone.evaluate(() => window.__app.match().aimMode === 'hard'), 'むずかしい を選ぶと、その投げ方で試合が始まる');
     const started = await phone.evaluate(() => ({
       title: document.getElementById('vTitle').hidden,
       human: window.__app.match().human,
@@ -601,6 +606,41 @@ async function run() {
     await phone.waitForFunction(() => window.__app.textures().loaded >= 10, null, { timeout: 10000 }).catch(() => {});
     const texs = await phone.evaluate(() => window.__app.textures());
     ok(texs.loaded === 10 && texs.failed === 0, `地面と壁の絵 ${texs.loaded} 枚読めた (失敗 ${texs.failed})`);
+
+    // かんたん: 押すとすぐ投げ、玉が狙った相手へ曲がっていく。選んだ投げ方は開き直しても残る
+    const ezCtx = await browser.newContext({ ...base, viewport: { width: 430, height: 932 }, deviceScaleFactor: 1, hasTouch: true });
+    const ez = await ezCtx.newPage();
+    ez.on('pageerror', (e) => errors.push('かんたん: ' + e.message));
+    await ez.goto(URL);
+    await ez.waitForFunction(() => window.__app && window.__app.sprites().ready, null, { timeout: 10000 }).catch(() => {});
+    await ez.click('#btnStart');
+    await ez.waitForFunction(() => window.__app.match().phase === 'play', null, { timeout: 10000 });
+    const ezSet = await ez.evaluate(() => {
+      const m = window.__app.match(), me = window.__app.me();
+      me.x = 0; me.z = 6; me.balls = 3; me.cd = 0;
+      m.players.forEach((p) => { if (p !== me) { p.balls = 0; p.ai.think = 999; p.ai.goal = null; } });
+      m.stock = [0, 0];
+      const reds = m.players.filter((p) => p.team === 1);
+      reds.forEach((p, i) => { p.alive = i < 2; });
+      reds[0].x = 0; reds[0].z = -2; reds[1].x = 4.5; reds[1].z = -16;
+      return { mode: m.aimMode, foe: reds[0].id };
+    });
+    await ez.waitForTimeout(150);
+    const ezPadClass = await ez.evaluate(() => document.getElementById('throwPad').classList.contains('ready'));
+    const ezPad = await ez.evaluate(() => { const r = document.getElementById('throwPad').getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2 }; });
+    await ez.mouse.click(ezPad.x, ezPad.y);
+    await ez.waitForTimeout(40);
+    const ezBall = await ez.evaluate(() => { const m = window.__app.match(); return m.balls.filter((b) => b.owner === m.human).map((b) => b.home); });
+    ok(ezSet.mode === 'easy' && ezPadClass, 'かんたん: 押さえなくても、当たるコースなら投げるボタンが赤い');
+    ok(ezBall.length === 1 && ezBall[0] === ezSet.foe, `かんたん: すぐ離しても投げ、玉が狙った相手を追う (${JSON.stringify(ezBall)})`);
+    await ez.click('#btnPause'); await ez.click('#btnQuit');
+    await ez.click('.diff button[data-mode="hard"]');
+    await ez.reload();
+    await ez.waitForFunction(() => window.__app, null, { timeout: 10000 });
+    const kept = await ez.evaluate(() => document.querySelector('.diff button.on').dataset.mode);
+    ok(kept === 'hard', `選んだ投げ方は開き直しても残る (${kept})`);
+    await ezCtx.close();
+    await phone.bringToFront();
 
     // 絵が読めないときは、今までの 3D の体のまま遊べる
     const noImg = await browser.newContext({ ...base, viewport: { width: 430, height: 932 }, deviceScaleFactor: 1 });

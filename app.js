@@ -7,7 +7,8 @@
   const C = window.Core;
   const R = C.R;
   const T = window.THREE;
-  const VERSION = 'v8';
+  const VERSION = 'v9';
+  const AI_SKILL = 0.5;      // 相手の強さ (前の「ふつう」)。強さのえらびはやめ、投げ方をえらぶ
   const AUTO_CROUCH = 0.2;   // 止まってからしゃがむまで (秒)
   // カメラ: 自分の (h) 上・(back) 後ろから、(ahead) 先の地面を見る
   // ahead は 5 → 7: 5 だとスタート地点から相手のシェルター・バックラインが上の帯の下に隠れ、
@@ -41,7 +42,7 @@
   // ------------------------------------------------------------ 状態
   const app = {
     match: null,
-    diff: 0.5,
+    aimMode: 'easy',     // 投げ方: 'easy' = 押したらすぐ・玉が曲がる / 'hard' = 押さえて構え、離して投げる
     paused: false,
     running: false,
     acc: 0,
@@ -490,9 +491,10 @@
     const p = me();
     const aim = currentAim();
     app.lock = aim;
-    const steady = !!(p && app.aim && (p.aimF >= 1 || app.match.phase === 'vt'));
+    const easy = app.match.aimMode === 'easy';
+    const steady = !!(p && (easy || app.match.phase === 'vt' || (app.aim && p.aimF >= 1)));
     const ready = !!(aim && aim.clear && p && p.balls > 0 && steady);
-    if (ready && !app.hud.ready && app.aim && app.match.phase === 'play') sound.steady();
+    if (ready && !app.hud.ready && app.aim && !easy && app.match.phase === 'play') sound.steady();
     if (app.hud.ready !== ready) { app.hud.ready = ready; els.throwPad.classList.toggle('ready', ready); }
     // 狙っている相手の足もとに輪 (当たるコースなら赤、壁に隠れていれば灰色)
     if (aim && aim.target != null) {
@@ -599,7 +601,7 @@
       app.aim = a;
       const aim = currentAim();
       app.aim = null;
-      if (aim) app.input.throwAt = { x: aim.x, z: aim.z };
+      if (aim) app.input.throwAt = { x: aim.x, z: aim.z, target: aim.target };
       else if (app.match.phase === 'play') app.input.throwAt = { x: p.x, z: p.z - C.side(p.team) * 12 };
     };
     els.throwPad.addEventListener('pointerup', (e) => release(e, false));
@@ -689,8 +691,9 @@
     sound.unlock();
     app.match = C.createMatch({
       seed: (Math.random() * 4294967296) >>> 0,
-      skill: [0.55, app.diff],
-      human: 1
+      skill: [0.55, AI_SKILL],
+      human: 1,
+      aimMode: app.aimMode
     });
     resetPlayers();
     app.hud = {};
@@ -1130,7 +1133,7 @@
     // 投げた直後は構え直し (ボタンが沈み、ふちが灰色で戻っていく)
     const recover = !!(p && p.cd > 0 && balls > 0 && app.match.phase === 'play');
     if (app.hud.recover !== recover) { app.hud.recover = recover; els.throwPad.classList.toggle('recover', recover); }
-    const aiming = !!(p && app.aim && app.match.phase === 'play') && !recover;
+    const aiming = !!(p && app.aim && app.match.phase === 'play' && app.match.aimMode !== 'easy') && !recover;
     if (app.hud.aiming !== aiming) { app.hud.aiming = aiming; els.throwPad.classList.toggle('aiming', aiming); }
     const prog = recover ? Math.round((1 - p.cd / R.THROW_CD) * 12) / 12
       : aiming ? Math.round(p.aimF * 12) / 12
@@ -1219,12 +1222,17 @@
     buildField();
     loadSprites();
     bindControls();
+    // 投げ方のえらび (前に選んだ方を覚えておく)
+    try { const v = localStorage.getItem('yukigassen.aimMode'); if (v === 'easy' || v === 'hard') app.aimMode = v; } catch (err) { /* 覚えられなくても動く */ }
+    const showMode = () => document.querySelectorAll('.diff button').forEach((x) => x.classList.toggle('on', x.dataset.mode === app.aimMode));
     document.querySelectorAll('.diff button').forEach((b) => {
       b.addEventListener('click', () => {
-        app.diff = Number(b.dataset.diff);
-        document.querySelectorAll('.diff button').forEach((x) => x.classList.toggle('on', x === b));
+        app.aimMode = b.dataset.mode;
+        try { localStorage.setItem('yukigassen.aimMode', app.aimMode); } catch (err) { /* 覚えられなくても動く */ }
+        showMode();
       });
     });
+    showMode();
     els.btnStart.addEventListener('click', startMatch);
     els.btnAgain.addEventListener('click', startMatch);
     els.btnPause.addEventListener('click', () => pause(true));
@@ -1257,11 +1265,11 @@
       app,
       match: () => app.match,
       me,
-      start: (diff, seed) => {
-        if (diff != null) app.diff = diff;
+      start: (mode, seed) => {
+        if (mode != null) app.aimMode = mode;
         startMatch();
         if (seed != null) {
-          app.match = C.createMatch({ seed, skill: [0.55, app.diff], human: 1 });
+          app.match = C.createMatch({ seed, skill: [0.55, AI_SKILL], human: 1, aimMode: app.aimMode });
           resetPlayers(); snapCamera(); handleEvents();
         }
       },

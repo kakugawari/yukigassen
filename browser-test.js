@@ -329,13 +329,22 @@ async function run() {
     await phone.waitForTimeout(50);
     const juice = await phone.evaluate((id) => ({
       out: !window.__app.match().players[id].alive,
-      pop: [...document.querySelectorAll('#pops .pop')].map((e) => e.textContent),
+      pop: [...document.querySelectorAll('#pops .hit-text b')].map((e) => e.textContent),
+      center: (() => { const e = document.querySelector('#pops .hit-text'); if (!e) return null; const r = e.getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2, w: r.width }; })(),
+      shake: window.__app.hitShake(),
       combo: window.__app.app.combo.n
     }), victim);
+    await phone.waitForFunction(() => !document.querySelector('#pops .hit-text'), null, { timeout: 3000 }).catch(() => {});
+    const hitGone = await phone.evaluate(() => ({ left: document.querySelectorAll('#pops .hit-text').length, shake: window.__app.hitShake() }));
+    const bashi = await phone.evaluate(() => window.__app.sound('bashi'));
     // (直前のはじく確かめで当たっていれば、連続ヒットの言葉になる)
     const fans = await phone.evaluate(() => window.__app.scenery());
     ok(fans.fans >= 100 && fans.cheer[0] > 0 && fans.cheer[1] === 0, `当てると、当てた側 (あお) の観客が跳ねる (観客 ${fans.fans} 人 / 跳ねる ${fans.cheer.map((v) => v.toFixed(1))})`);
-    ok(juice.out && juice.pop.some((t) => /OUT!|ダブル!|トリプル!|連続!/.test(t)), `構えて当てると文字が浮かぶ (${juice.pop.join(',')})`);
+    ok(juice.out && juice.pop.includes('HIT!!'), `構えて当てると HIT!! が出る (${juice.pop.join(',')})`);
+    ok(juice.center && Math.abs(juice.center.x - 215) < 30 && juice.center.y > 300 && juice.center.y < 560 && juice.center.w > 200, `HIT!! は画面の真ん中に大きく出る (${juice.center && Math.round(juice.center.x)}, ${juice.center && Math.round(juice.center.y)} / 幅 ${juice.center && Math.round(juice.center.w)})`);
+    ok(juice.shake > 0 && hitGone.shake === 0, `当てた瞬間だけ画面が揺れ、すぐ収まる (${juice.shake.toFixed(2)} → ${hitGone.shake})`);
+    ok(hitGone.left === 0, 'HIT!! は消える (残らない)');
+    ok(bashi && bashi.peak > 0.2 && bashi.peak < 0.9, `「バシッ!」の大きさ: いちばん大きい所 ${bashi && bashi.peak.toFixed(2)} (0.2〜0.9) / 平均 ${bashi && bashi.rms.toFixed(3)}`);
 
     // ---- 止まるとしゃがんで丸める
     await phone.evaluate(() => { const m = window.__app.match(); m.stock[0] = 30; window.__app.me().balls = 1; });

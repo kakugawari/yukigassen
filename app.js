@@ -7,7 +7,7 @@
   const C = window.Core;
   const R = C.R;
   const T = window.THREE;
-  const VERSION = 'v11';
+  const VERSION = 'v12';
   const AI_SKILL = 0.5;      // 相手の強さ (前の「ふつう」)。強さのえらびはやめ、投げ方をえらぶ
   const AUTO_CROUCH = 0.2;   // 止まってからしゃがむまで (秒)
   // カメラ: 自分の (h) 上・(back) 後ろから、(ahead) 先の地面を見る
@@ -54,6 +54,7 @@
     slowT: 0,            // ヒットストップの残り
     combo: { n: 0, t: 0 },
     shake: 0,
+    hitShake: 0,
     frames: 0,
     hud: {},
     bannerT: 0
@@ -782,8 +783,28 @@
       o.connect(g); g.connect(master);
       o.start(t); o.stop(t + dur + 0.02);
     }
-    return {
-      unlock,
+    /**
+     * 効果音を音の出ない所で描き出して、大きさを測る (確かめ用)。最大と平均 (RMS) を返す。
+     * 遅らせて鳴らす部分 (setTimeout) は入らない
+     */
+    async function measure(name, arg) {
+      const OAC = window.OfflineAudioContext || window.webkitOfflineAudioContext;
+      if (!OAC) return null;
+      const keep = [ctx, master, noise];
+      const oc = new OAC(1, 44100 * 0.6, 44100);
+      ctx = oc; master = oc.createGain(); master.gain.value = 0.5; master.connect(oc.destination);
+      noise = oc.createBuffer(1, oc.sampleRate * 0.5, oc.sampleRate);
+      const d = noise.getChannelData(0);
+      for (let i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1;
+      try { api[name](arg); } finally { [ctx, master, noise] = keep; }
+      const buf = await oc.startRendering();
+      const x = buf.getChannelData(0);
+      let peak = 0, sum = 0;
+      for (let i = 0; i < x.length; i++) { const v = Math.abs(x[i]); if (v > peak) peak = v; sum += x[i] * x[i]; }
+      return { peak, rms: Math.sqrt(sum / x.length) };
+    }
+    const api = {
+      unlock, measure,
       throw() { burst(0.16, 1400, 0.8, 0.25, 'bandpass'); },
       steady() { tone(1320, 0.07, 0.12, 'triangle'); },
       splat(near) { burst(0.12, 500, 0.7, near ? 0.5 : 0.22, 'lowpass'); },
@@ -796,10 +817,18 @@
         } else tone(520, 0.18, 0.18, 'triangle', 260);
       },
       out() { tone(330, 0.35, 0.2, 'sawtooth', 120); },
+      /** 当てたときの「バシッ!」: 低いドン (下がる正弦) + 中くらいの雪の粉 + 高いパチッ */
+      bashi() {
+        if (!ctx) return;
+        tone(150, 0.16, 0.55, 'sine', 48);
+        burst(0.16, 900, 0.9, 0.55, 'lowpass');
+        burst(0.05, 3200, 1.4, 0.35, 'bandpass');
+      },
       made() { tone(880, 0.06, 0.08, 'sine'); },
       whistle(long) { tone(2300, long ? 0.7 : 0.35, 0.12, 'sine'); tone(2340, long ? 0.7 : 0.35, 0.08, 'sine'); },
       win() { [523, 659, 784, 1047].forEach((f, i) => setTimeout(() => tone(f, 0.22, 0.14, 'triangle'), i * 110)); }
     };
+    return api;
   })();
 
   // ------------------------------------------------------------ 試合の流れ
@@ -825,6 +854,26 @@
   }
 
   /** 3D の位置に、ぽんと浮かぶ文字 */
+  /**
+   * 自分が当てたとき: 画面の真ん中に「HIT!!」。斜めの太字・白に赤と黒の縁取り。
+   * 0.08 秒で大きく飛び出し、少し縮みながら 0.5 秒で消える。連続ヒットは下に小さく添える
+   */
+  const HIT_SHAKE = { time: 0.2, amp: 0.22 };   // 揺れ: 0.2 秒、はじめ 0.22m (画面で 8px ほど) から 0 へ
+  function hitText(sub) {
+    const el = document.createElement('div');
+    el.className = 'hit-text';
+    el.innerHTML = '<b data-t="HIT!!">HIT!!</b>' + (sub ? `<small data-t="${sub}">${sub}</small>` : '');
+    els.pops.appendChild(el);
+    const a = el.animate([
+      { transform: 'translate(-50%, -50%) rotate(-8deg) skewX(-12deg) scale(1.9)', opacity: 0 },
+      { transform: 'translate(-50%, -50%) rotate(-8deg) skewX(-12deg) scale(1)', opacity: 1, offset: 0.16 },
+      { transform: 'translate(-50%, -50%) rotate(-8deg) skewX(-12deg) scale(1.04)', opacity: 1, offset: 0.55 },
+      { transform: 'translate(-50%, -50%) rotate(-8deg) skewX(-12deg) scale(.72)', opacity: 0 }
+    ], { duration: 500, easing: 'ease-out' });
+    a.onfinish = () => el.remove();
+    return el;
+  }
+
   function popText(text, x, y, z, level) {
     const v = new T.Vector3(x, y, z).project(camera);
     const r = els.canvas.getBoundingClientRect();
@@ -897,13 +946,13 @@
           } else if (e.by === mine) {
             // 自分の一撃: ヒットストップ・大きな粉雪・OUT! の文字・連続ヒット
             puff(e.x, e.y, e.z, 30, 1.8);
-            app.slowT = 0.16; app.shake = 0.28;
+            app.slowT = 0.16;
+            app.hitShake = HIT_SHAKE.time;          // 画面を一瞬だけ揺らす (すぐ収まる)
             const now = performance.now() / 1000;
             app.combo.n = now - app.combo.t < 6 ? app.combo.n + 1 : 1;
             app.combo.t = now;
-            sound.hit(app.combo.n);
-            const word = ['OUT!', 'ダブル!', 'トリプル!'][app.combo.n - 1] || `${app.combo.n}連続!`;
-            popText(word, e.x, 2.2, e.z, app.combo.n);
+            sound.bashi(); sound.hit(app.combo.n);
+            hitText(app.combo.n >= 2 ? (['', '', 'ダブル!', 'トリプル!'][app.combo.n] || `${app.combo.n}連続!`) : '');
           } else {
             puff(e.x, e.y, e.z, 16, 1.3);
             sound.hit();
@@ -1140,6 +1189,13 @@
       app.shake -= dt;
       camera.position.x += (Math.random() - 0.5) * app.shake * 0.6;
       camera.position.y += (Math.random() - 0.5) * app.shake * 0.6;
+    }
+    if (app.hitShake > 0) {
+      // 当てた瞬間の揺れ: 左右と上下に、短い周期で、すぐ小さくなる
+      app.hitShake = Math.max(0, app.hitShake - dt);
+      const k = app.hitShake / HIT_SHAKE.time, a = HIT_SHAKE.amp * k * k, t = performance.now() / 1000;
+      camera.position.x += Math.sin(t * 95) * a;
+      camera.position.y += Math.cos(t * 77) * a * 0.7;
     }
     camera.lookAt(camLook);
     updateFans(performance.now() / 1000, Math.min(0.05, (performance.now() - (updateFans.last || performance.now())) / 1000)); updateFans.last = performance.now();
@@ -1402,6 +1458,8 @@
       pickFrame,
       scenery: () => ({ fans: scenery.fans.length, cheer: scenery.cheerT.slice() }),
       scene: () => scene,
+      sound: (name, arg) => sound.measure(name, arg),
+      hitShake: () => app.hitShake,
       sprites: () => ({ ready: !!sprites.tex, failed: sprites.failed }),
       hudBottom: () => app.hudBottom,
       textures: () => ({ loaded: app.tex.loaded, failed: app.tex.failed, names: app.tex.names.slice() }),

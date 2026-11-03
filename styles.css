@@ -188,6 +188,21 @@ button { font: inherit; color: inherit; cursor: pointer; }
 .throw.aiming.ready .ring { background: conic-gradient(#ff3b30 1turn, transparent 0); }
 .throw.recover { filter: saturate(.4) brightness(.9); }
 .throw.recover .ring { background: conic-gradient(#9aa6b8 calc(var(--p, 0) * 1turn), transparent 0); }
+/* 取り消しの位置 (引っぱってから真ん中へ戻した): 離しても投げない */
+#throwPad.cancel { background: radial-gradient(circle at 40% 35%, #fff, #eef1f5 60%, #c9d0da); color: #6b778a; }
+.throw.cancel .label { font-size: 0; }
+.throw.cancel .label::after { content: "やめる"; font-size: 18px; }
+/* 必殺ゲージ: 投げるボタンの下に小さな棒。満タンでボタンが金色に光る */
+.throw .sp {
+  position: absolute; left: 50%; bottom: -24px; transform: translateX(-50%);
+  width: 92px; height: 14px; border-radius: 7px; overflow: hidden;
+  background: rgba(20, 40, 70, .45); box-shadow: 0 0 0 2px #fff;
+  pointer-events: none;
+}
+.throw .sp i { position: absolute; inset: 0; transform-origin: left; transform: scaleX(var(--sp, 0)); background: linear-gradient(90deg, #ffb020, #ffe06a); }
+.throw .sp b { position: relative; display: block; text-align: center; font-size: 10px; line-height: 14px; color: #fff; text-shadow: 0 1px 2px rgba(0,0,0,.6); }
+#throwPad.super { background: radial-gradient(circle at 40% 35%, #fff, #fff1c2 60%, #ffcf4d); color: #a05a00; box-shadow: 0 0 0 4px #ffd34d, 0 0 22px 6px rgba(255, 190, 40, .75); }
+#throwPad.super.cancel { background: radial-gradient(circle at 40% 35%, #fff, #eef1f5 60%, #c9d0da); color: #6b778a; box-shadow: 0 4px 16px rgba(30, 60, 100, .35); }   /* 取り消しは金色より優先 */
 .throw {
   right: 22px;
   bottom: calc(env(safe-area-inset-bottom) + 70px);

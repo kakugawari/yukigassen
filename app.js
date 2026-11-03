@@ -7,9 +7,10 @@
   const C = window.Core;
   const R = C.R;
   const T = window.THREE;
-  const VERSION = 'v13';
+  const VERSION = 'v14';
   const AI_SKILL = 0.5;      // 相手の強さ (前の「ふつう」)。強さのえらびはやめ、投げ方をえらぶ
-  const AUTO_CROUCH = 0.2;   // 止まってからしゃがむまで (秒)
+  const AUTO_CROUCH = 0.2;
+  const CANCEL = { out: 40, back: 18 };   // 投げるボタン: 40px 以上引っぱってから 18px 以内へ戻して離すと取り消し   // 止まってからしゃがむまで (秒)
   // カメラ: 自分の (h) 上・(back) 後ろから、(ahead) 先の地面を見る
   // ahead は 5 → 7: 5 だとスタート地点から相手のシェルター・バックラインが上の帯の下に隠れ、
   // 狙っている相手が見えなかった (自分は画面の 68% → 75% の高さへ下がる)
@@ -22,7 +23,7 @@
     setNo: $('setNo'), time: $('time'), stockBlue: $('stockBlue'), stockRed: $('stockRed'),
     ptsBlue: $('ptsBlue'), ptsRed: $('ptsRed'), inEnemy: $('inEnemy'), warn: $('warn'),
     stickZone: $('stickZone'), stick: $('stick'), knob: $('knob'), moveHint: $('moveHint'),
-    makeRing: $('makeRing'), throwPad: $('throwPad'), myBalls: $('myBalls'), pops: $('pops'),
+    makeRing: $('makeRing'), throwPad: $('throwPad'), myBalls: $('myBalls'), pops: $('pops'), spGauge: $('spGauge'), padLabel: $('padLabel'),
     markLock: $('markLock'), markFlag: $('markFlag'), markFlagText: $('markFlagText'), score: document.querySelector('.score'),
     banner: $('banner'),
     vTitle: $('vTitle'), vPause: $('vPause'), vResult: $('vResult'),
@@ -499,10 +500,12 @@
   // ------------------------------------------------------------ 雪玉と粉雪
   const ballGeo = new T.SphereGeometry(0.15, 12, 8);
   const ballMat = lambert(0xffffff, { emissive: 0x334455 });
+  const bigBallMat = lambert(0xfff6d8, { emissive: 0x806020 });   // 大玉はうっすら金色に光る
   function ballView(b) {
     let v = views.balls.get(b.id);
     if (!v) {
-      v = { mesh: new T.Mesh(ballGeo, ballMat), shadow: blob(0.16, 0.8) };
+      v = { mesh: new T.Mesh(ballGeo, b.big ? bigBallMat : ballMat), shadow: blob(b.big ? 0.5 : 0.16, 0.8) };
+      if (b.big) v.mesh.scale.setScalar(R.BIG_R / R.BALL_R * 0.75);   // 大玉 (当たりの大きさに合わせる)
       scene.add(v.mesh);
       views.balls.set(b.id, v);
     }
@@ -704,14 +707,20 @@
       if (!a || a.id !== e.pointerId) return;
       a.dx = e.clientX - a.sx; a.dy = e.clientY - a.sy;
       a.len = Math.hypot(a.dx, a.dy);
+      a.maxLen = Math.max(a.maxLen || 0, a.len);
+      // 一度引っぱってから真ん中へ戻すと「取り消し」 (離しても投げない)
+      const cancel = a.maxLen >= CANCEL.out && a.len < CANCEL.back;
+      if (cancel !== !!app.aimCancel) { app.aimCancel = cancel; els.throwPad.classList.toggle('cancel', cancel); }
     });
     const release = (e, cancel) => {
       const a = app.aim;
       if (!a || a.id !== e.pointerId) return;
       app.aim = null;
       els.throwPad.classList.remove('on');
+      const wasCancel = !!app.aimCancel;
+      app.aimCancel = false; els.throwPad.classList.remove('cancel');
       updateAim();
-      if (cancel) return;
+      if (cancel || wasCancel) return;     // 取り消し: 投げない (むずかしいなら構えも 0 に戻り、のぞいていれば戻る)
       const p = me();
       if (!p || !p.alive) return;
       // 離した瞬間の指で狙いを決める
@@ -807,6 +816,8 @@
       unlock, measure,
       throw() { burst(0.16, 1400, 0.8, 0.25, 'bandpass'); },
       steady() { tone(1320, 0.07, 0.12, 'triangle'); },
+      /** 大玉を投げた: 低くうなる音 */
+      big() { tone(220, 0.35, 0.3, 'sawtooth', 90); burst(0.3, 600, 0.7, 0.3, 'lowpass'); },
       splat(near) { burst(0.12, 500, 0.7, near ? 0.5 : 0.22, 'lowpass'); },
       hit(combo) {
         burst(0.2, 700, 0.6, 0.6, 'lowpass');
@@ -938,6 +949,19 @@
           if (v) v.throwT = 0.35;
           const p = m.players[e.player];
           if (p && Math.hypot(p.x - camLook.x, p.z - camLook.z) < 14) sound.throw();
+          break;
+        }
+        case 'bigThrow': sound.big(); break;
+        case 'splash': {
+          // 大玉が落ちた所: 大きな粉雪と、強めの揺れ
+          puff(e.x, 0.3, e.z, 40, 2.4);
+          app.hitShake = HIT_SHAKE.time * 1.4; sound.bashi();
+          break;
+        }
+        case 'duck': {
+          // むずかしい: 狙われた相手がしゃがんだ (フェイントの合図)
+          const q = m.players[e.player];
+          if (q) popText('サッ', q.x, 2.4, q.z, 0);
           break;
         }
         case 'splat': {
@@ -1323,6 +1347,10 @@
     let bh = '';
     for (let i = 0; i < R.MAX_CARRY; i++) bh += `<i class="${i < balls ? '' : 'none'}"></i>`;
     setHTML('mb', els.myBalls, bh);
+    // 必殺ゲージ (当てると貯まる。満タンなら次の 1 球が大玉)
+    const sp = app.match ? app.match.sp[0] : 0;
+    const spq = Math.round(sp * 12) / 12;
+    if (app.hud.sp !== spq) { app.hud.sp = spq; els.spGauge.style.setProperty('--sp', spq); els.throwPad.classList.toggle('super', sp >= 1); els.padLabel.textContent = sp >= 1 ? '大玉!' : '投げる'; }
     const empty = balls === 0;
     if (app.hud.empty !== empty) { app.hud.empty = empty; els.throwPad.classList.toggle('empty', empty); }
     // 丸めている進み具合 (12段階に丸める。細かく書き換えると遅い端末でカクつく)
@@ -1365,7 +1393,8 @@
       while (app.acc >= h && n < 4) {
         const inp = {
           mx: app.input.mx, mz: app.input.mz, crouch: app.input.crouch,
-          aiming: !!app.aim && app.match.phase === 'play',   // 投げるを押さえている間は構える (立つ)
+          aiming: !!app.aim && !app.aimCancel && app.match.phase === 'play',   // 投げるを押さえている間は構える (立つ)。取り消しの位置では構えない
+          aimTarget: app.lock && app.aim ? app.lock.target : null,
           throwAt: app.input.throwAt
         };
         app.input.throwAt = null;
@@ -1482,6 +1511,7 @@
       scene: () => scene,
       sound: (name, arg) => sound.measure(name, arg),
       hitShake: () => app.hitShake,
+      cancelState: () => ({ cancel: !!app.aimCancel, cls: els.throwPad.classList.contains('cancel') }),
       sprites: () => ({ ready: !!sprites.tex, failed: sprites.failed }),
       hudBottom: () => app.hudBottom,
       textures: () => ({ loaded: app.tex.loaded, failed: app.tex.failed, names: app.tex.names.slice() }),

@@ -273,6 +273,36 @@ async function run() {
     ok(h1.crouch === false && h2.crouch === false, '構えている間は立つ');
     ok(h3.n === 1 && h3.f === 0, `離すと 1 個投げ、構えは 0 に戻る (投げた ${h3.n})`);
 
+    // ---- 取り消し: 押さえたまま外へ引っぱり、真ん中へ戻して離すと投げない
+    await phone.waitForFunction(() => window.__app.me().cd <= 0, null, { timeout: 12000 });
+    await phone.evaluate(() => { const me = window.__app.me(); me.balls = 3; window.__app.match().balls = []; });
+    await phone.mouse.move(pad.x, pad.y);
+    await phone.mouse.down();
+    await phone.mouse.move(pad.x - 70, pad.y - 30, { steps: 5 });
+    await phone.mouse.move(pad.x + 4, pad.y + 3, { steps: 5 });
+    await phone.waitForTimeout(80);
+    const cst = await phone.evaluate(() => ({ s: window.__app.cancelState(), label: getComputedStyle(document.querySelector('#throwPad .label'), '::after').content }));
+    await phone.mouse.up();
+    await phone.waitForTimeout(120);
+    const cAfter = await phone.evaluate(() => ({ balls: window.__app.me().balls, flying: window.__app.match().balls.filter((b) => b.owner === window.__app.match().human).length, cls: document.getElementById('throwPad').classList.contains('cancel'), f: window.__app.me().aimF }));
+    ok(cst.s.cancel && cst.s.cls && /やめる/.test(cst.label), `引っぱって真ん中へ戻すと「やめる」になる (${cst.label})`);
+    ok(cAfter.balls === 3 && cAfter.flying === 0 && !cAfter.cls && cAfter.f === 0, `そこで離すと投げない (雪玉 ${cAfter.balls}・飛んでいる ${cAfter.flying}・構え ${cAfter.f})`);
+
+    // ---- 必殺ゲージ: 満タンで投げるボタンが金色の「大玉!」になり、投げると大玉が飛ぶ
+    await phone.evaluate(() => { window.__app.match().sp[0] = 1; });
+    await phone.waitForTimeout(150);
+    const sup = await phone.evaluate(() => ({ cls: document.getElementById('throwPad').classList.contains('super'), label: document.getElementById('padLabel').textContent }));
+    await phone.mouse.move(pad.x, pad.y);
+    await phone.mouse.down();
+    await phone.waitForFunction(() => window.__app.me().aimF >= 1, null, { timeout: 12000 });
+    await phone.mouse.up();
+    await phone.waitForFunction(() => window.__app.match().balls.some((b) => b.big) || window.__app.match().sp[0] === 0, null, { timeout: 5000 }).catch(() => {});
+    const supAfter = await phone.evaluate(() => { const m = window.__app.match(); const big = m.balls.some((b) => b.big); m.balls = []; return { big, sp: m.sp[0] }; });
+    await phone.waitForTimeout(150);
+    const supLabel = await phone.evaluate(() => ({ cls: document.getElementById('throwPad').classList.contains('super'), label: document.getElementById('padLabel').textContent }));
+    ok(sup.cls && sup.label === '大玉!', `ゲージ満タンで投げるボタンが「大玉!」 (${sup.label})`);
+    ok(supAfter.big && supAfter.sp === 0 && !supLabel.cls && supLabel.label === '投げる', `投げると大玉が飛び、ゲージとボタンが戻る (大玉 ${supAfter.big}・ゲージ ${supAfter.sp}・${supLabel.label})`);
+
     // ---- 隠れている物の印: 狙っている相手が帯の下・画面の外なら、帯の下端に矢印。見えていれば出さない
     const marks = await phone.evaluate(async (ids) => {
       const A = window.__app, m = A.match(), me = A.me();

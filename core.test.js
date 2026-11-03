@@ -435,6 +435,79 @@ test('のぞき投げ: AI どうしで 6 試合、壁にふさがれたまま投
   assert.equal(blocked, 0, `壁にふさがれたまま投げた ${blocked}/${thrown}`);
 });
 
+test('必殺: 人が 2 回当てるとゲージ満タン、次の 1 球は大玉で、まわりの相手もアウト (壁の陰は助かる)', () => {
+  const m = playing({ human: 1, aimMode: 'easy' });
+  const me = m.players[1];
+  const foes = m.players.filter((p) => p.team === 1);
+  isolate(m, [1, ...foes.map((p) => p.id)]);
+  foes.forEach((q) => { q.ai.think = 999; q.ai.seen = new Proxy({}, { get: () => true }); q.balls = 0; q.standT = 99; q.vx = q.vz = 0; });
+  m.stock[1] = 0;
+  // ふつうの玉を 2 回当てる
+  for (const q of foes.slice(0, 2)) {
+    q.x = 3.6; q.z = -3; me.x = 3.6; me.z = 4; me.balls = 1; me.cd = 0; me.aimF = 1;
+    C.throwBall(m, me, q.x, q.z, q.id);
+    run(m, 1.0, { crouch: true });
+    assert.ok(!q.alive, 'ふつうの玉が当たった');
+    foes.forEach((o) => { if (o !== q && o.alive) { o.x = -4.6; o.z = -17 + o.id * 0.4; } });
+  }
+  assert.equal(m.sp[me.team], 1, `2 回でゲージ満タン (${m.sp[me.team]})`);
+  // 大玉: 狙った相手と、その 1.2m 横の相手がアウト。中央シェルターの裏 (1.6m 以内) の相手は助かる
+  const [a, b2, c] = foes.slice(2, 5);
+  me.x = 3.6; me.z = 4; me.balls = 1; me.cd = 0; me.aimF = 1;
+  a.x = 3.6; a.z = -3; b2.x = 2.4; b2.z = -3; 
+  const cs = C.SHELTERS.find((w) => w.x > 0 && w.z < 0 && w.z > -10);   // あか陣の右のシェルター
+  c.x = cs.x; c.z = cs.z - cs.d / 2 - R.PLAYER_R - 0.02;                 // その裏
+  const far = foes[5]; far.x = -4.5; far.z = -16;
+  const ball = C.throwBall(m, me, a.x, a.z, a.id);
+  assert.ok(ball.big && ball.r > R.BALL_R && m.sp[me.team] === 0, '大玉になり、ゲージは 0 に戻る');
+  run(m, 1.2, { crouch: true });
+  const evs = C.drainEvents(m);
+  assert.ok(!a.alive && !b2.alive, '狙った相手と、まわりの相手がアウト');
+  assert.ok(far.alive, '遠くの相手は無事');
+  assert.ok(evs.some((e) => e.type === 'splash'), '大玉が弾けた');
+  // 壁の陰: 大玉が落ちた所との間に壁があればアウトにならない
+  const m2 = playing({ human: 1 });
+  const me2 = m2.players[1], q1 = m2.players[7], q2 = m2.players[8];
+  isolate(m2, [1, 7, 8]);
+  [q1, q2].forEach((q) => { q.ai.think = 999; q.ai.seen = new Proxy({}, { get: () => true }); q.balls = 0; q.standT = 99; });
+  m2.stock[1] = 0; m2.sp[m2.players[1].team] = 1;
+  q1.x = cs.x; q1.z = cs.z + cs.d / 2 + R.PLAYER_R + 0.15;         // シェルターの手前 (こちら側) で当たる
+  q2.x = cs.x; q2.z = cs.z - cs.d / 2 - R.PLAYER_R - 0.02;         // シェルターの裏 (1.3m ほど離れている)
+  assert.ok(Math.hypot(q1.x - q2.x, q1.z - q2.z) < R.SPLASH_R, '弾ける範囲の中にいる');
+  me2.x = cs.x; me2.z = 5; me2.balls = 1; me2.cd = 0; me2.aimF = 1;
+  C.throwBall(m2, me2, q1.x, q1.z, q1.id);
+  run(m2, 1.2, { crouch: true });
+  assert.ok(!q1.alive && q2.alive, '壁の陰の相手は助かる');
+});
+
+test('むずかしい: 長く狙われた AI は壁の陰にしゃがみ、立ち上がってからしばらくはしゃがまない (フェイント)', () => {
+  let ducked = 0;
+  for (let k = 0; k < 20; k++) {
+    const m = playing({ human: 1, aimMode: 'hard', seed: 500 + k });
+    isolate(m, [1, 7]);
+    const me = m.players[1], q = m.players[7];
+    me.x = 1; me.z = 6; me.balls = 2; me.cd = 0;
+    q.x = 1; q.z = -6; q.ai.think = 999; q.ai.goal = null; q.balls = 0;
+    run(m, R.AIM_STEADY, { aiming: true, aimTarget: q.id });
+    if (q.ai.duckT > 0) {
+      ducked++;
+      assert.ok(q.crouch, 'しゃがんでいる');
+      run(m, 0.1, {});                                  // 取り消し
+      run(m, R.DUCK_TIME, {});                          // 立ち上がるまで待つ
+      assert.ok(q.ai.calmT > 0 && q.ai.duckT <= 0, '立ち上がり、しばらくはしゃがまない');
+      run(m, R.AIM_STEADY + 0.05, { aiming: true, aimTarget: q.id });
+      assert.ok(!(q.ai.duckT > 0), 'すぐ狙い直すと、今度はしゃがまない');
+    }
+  }
+  assert.ok(ducked >= 5 && ducked <= 18, `しゃがんだ ${ducked}/20 (毎回ではない)`);
+  // かんたんでは、狙われてもしゃがまない
+  const m = playing({ human: 1, aimMode: 'easy' });
+  isolate(m, [1, 7]);
+  const q = m.players[7]; q.ai.think = 999; q.balls = 0;
+  run(m, 1.0, { aiming: true, aimTarget: q.id });
+  assert.ok(!(q.ai.duckT > 0), 'かんたんではしゃがまない');
+});
+
 test('フラッグはバックスが抜いてもよい', () => {
   const m = playing({ human: null });
   m.players.forEach((p) => { p.balls = 0; });

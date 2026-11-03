@@ -17,6 +17,9 @@ function isolate(m, keep) {
     p.alive = false;
   }
 }
+/** 中央シェルター (z=0) のすぐ自陣側に立つ位置 (壁に押し返されない、いちばん近い所) */
+const BEHIND = C.SHELTERS[0].d / 2 + R.PLAYER_R + 0.02;
+
 function run(m, sec, input) {
   const n = Math.round(sec * 60);
   for (let i = 0; i < n; i++) C.step(m, 1 / 60, typeof input === 'function' ? input(i) : input);
@@ -62,7 +65,7 @@ test('シェルターの陰でしゃがめば当たらない。立っている�
     isolate(m, [thrower.id, target.id]);
     m.human = target.id;
     // 中央シェルター (z=0) のすぐ自陣側 (z>0) にしゃがむ
-    target.x = 0.3; target.z = 0.225 + 0.32;
+    target.x = 0.3; target.z = BEHIND;
     thrower.x = 0.5; thrower.z = -9;
     // 足もとを狙うと壁に当たるので、奥 (4m 先) へ落として頭越しに当てる
     thrower.balls = 1; m.stock[1] = 0;
@@ -80,7 +83,7 @@ test('壁の陰にいる相手の足もとを狙うと、壁に当たって止�
   const target = m.players.find((p) => p.team === 0 && p.role === 'F');
   isolate(m, [thrower.id, target.id]);
   m.human = target.id;
-  target.x = 0.3; target.z = 0.55;
+  target.x = 0.3; target.z = BEHIND;
   thrower.x = 0.5; thrower.z = -9;
   thrower.balls = 1; m.stock[1] = 0;
   C.throwBall(m, thrower, target.x, target.z);
@@ -95,7 +98,7 @@ test('投げた直後は頭が出る (しゃがんでいても当たる)', () =>
   const target = m.players.find((p) => p.team === 0 && p.role === 'F');
   isolate(m, [thrower.id, target.id]);
   m.human = target.id;
-  target.x = 0.3; target.z = 0.55;
+  target.x = 0.3; target.z = BEHIND;
   thrower.x = 0.5; thrower.z = -9;
   target.crouch = true;
   thrower.balls = 1; m.stock[1] = 0;
@@ -258,7 +261,7 @@ test('狙いの補助: 走っている相手にも、壁の陰に立つ相手に
   isolate(m, [1, 7]);
   const me = m.players[1], q = m.players[7];
   me.x = 0.5; me.z = 9; me.balls = 1;
-  q.x = 0.3; q.z = -0.55; q.vx = q.vz = 0; q.ai.think = 999; q.ai.seen = new Proxy({}, { get: () => true });
+  q.x = 0.3; q.z = -BEHIND; q.vx = q.vz = 0; q.standT = 9; q.ai.think = 999; q.ai.seen = new Proxy({}, { get: () => true });   // 中央シェルターのすぐ裏に立ったまま
   const aim = C.assistAim(m, me, null, q);
   assert.ok(aim.clear, '当たるコースが見つかる');
   assert.ok(aim.z < q.z - 1, `相手より奥へ落とす (着地 z=${aim.z.toFixed(2)})`);

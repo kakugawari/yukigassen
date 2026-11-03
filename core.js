@@ -29,12 +29,12 @@
     WIN_POINTS: 10,       // 全員アウト・フラッグで勝つと 10 ポイント
     VT_DIST: 12,          // ビクトリースロー: フラッグまでの距離
     PLAYER_R: 0.3,
-    STAND_H: 1.7,
-    CROUCH_H: 0.85,       // シェルター (0.9) より低い
+    STAND_H: 2.1,         // 壁を大きくしたのに合わせて、人の高さも上げた (前は 1.7)
+    CROUCH_H: 1.1,        // シェルター (1.2) より低い
     BALL_R: 0.11,
     G: 9.8,
     THROW_H: 17,          // 投げた球の水平の速さ (m/s)
-    THROW_Y: 1.5,         // 手をはなす高さ
+    THROW_Y: 1.85,        // 手をはなす高さ
     RANGE: 22,            // 届く距離
     MIN_RANGE: 1.5,
     SPEED: 4.3,           // 走る速さ
@@ -81,12 +81,13 @@
    * w: 横幅 (x)、d: 奥行き (z)、h: 高さ。
    */
   function makeShelters() {
-    const list = [{ x: 0, z: 0, w: 1.8, d: 0.45, h: 0.9, kind: 'center', team: -1 }];
+    // 大きさは、絵の選手 (しゃがんでも幅 1m ほどに見える) に対して壁が小さいと言われて 1.5 倍にした
+    const list = [{ x: 0, z: 0, w: 2.7, d: 0.68, h: 1.2, kind: 'center', team: -1 }];
     for (const team of [0, 1]) {
       const s = side(team);
-      list.push({ x: 0, z: s * 14.6, w: 2.6, d: 0.9, h: 1.0, kind: 'chateau', team });
-      list.push({ x: -2.6, z: s * 8, w: 1.3, d: 0.45, h: 0.9, kind: 'shelter', team });
-      list.push({ x: 2.6, z: s * 8, w: 1.3, d: 0.45, h: 0.9, kind: 'shelter', team });
+      list.push({ x: 0, z: s * 14.6, w: 3.9, d: 1.35, h: 1.3, kind: 'chateau', team });
+      list.push({ x: -2.6, z: s * 8, w: 1.95, d: 0.68, h: 1.2, kind: 'shelter', team });
+      list.push({ x: 2.6, z: s * 8, w: 1.95, d: 0.68, h: 1.2, kind: 'shelter', team });
     }
     return list;
   }
@@ -415,7 +416,10 @@
     // 押し出される距離 (PLAYER_R) より少しだけ細く見る。太く見ると、壁ぎわに立った時点で
     // 「箱の中」になって、ふさがっていることに気づけない
     const r = R.PLAYER_R - 0.02;
-    const sh = blockingShelter(p.x, p.z, gx, gz, r);
+    // 目的地が 1m 以内なら、まっすぐ向かう (壁に押し返されながら滑って着く)。
+    // 壁の角にぴったり寄せた目的地は、まっすぐの線がいつも壁をかすめて、角の回り込みを繰り返していた
+    const near = Math.hypot(gx - p.x, gz - p.z) < 1.0;
+    const sh = near ? null : blockingShelter(p.x, p.z, gx, gz, r);
     let tx = gx, tz = gz;
     if (sh) {
       const mg = R.PLAYER_R + 0.3;
@@ -426,7 +430,10 @@
         for (const cz of zs) {
           if (Math.abs(cx) > R.HALF_W - R.PLAYER_R) continue;
           const d0 = Math.hypot(cx - p.x, cz - p.z);
-          if (d0 < 0.12) continue;                         // もう着いている角
+          const key = cx.toFixed(2) + ',' + cz.toFixed(2);
+          // もう着いた角へは戻らない (着いた角から少し離れると、また近い角を選んで行ったり来たりした)
+          if (d0 < 0.12) { p._navDone = key; continue; }
+          if (p._navDone === key) continue;
           const free = !blockingShelter(p.x, p.z, cx, cz, r);
           const cost = d0 + Math.hypot(gx - cx, gz - cz) + (free ? 0 : 50) +
             (blockingShelter(cx, cz, gx, gz, r) ? 1.5 : 0);

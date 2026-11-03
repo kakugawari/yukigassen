@@ -7,14 +7,19 @@
   const C = window.Core;
   const R = C.R;
   const T = window.THREE;
-  const VERSION = 'v14';
+  const VERSION = 'v15';
   const AI_SKILL = 0.5;      // 相手の強さ (前の「ふつう」)。強さのえらびはやめ、投げ方をえらぶ
   const AUTO_CROUCH = 0.2;
   const CANCEL = { out: 40, back: 18 };   // 投げるボタン: 40px 以上引っぱってから 18px 以内へ戻して離すと取り消し   // 止まってからしゃがむまで (秒)
   // カメラ: 自分の (h) 上・(back) 後ろから、(ahead) 先の地面を見る
   // ahead は 5 → 7: 5 だとスタート地点から相手のシェルター・バックラインが上の帯の下に隠れ、
   // 狙っている相手が見えなかった (自分は画面の 68% → 75% の高さへ下がる)
-  const CAM = { h: 21, back: 10, ahead: 7, fov: 52 };
+  // カメラ: 低め (8m 上・8m 後ろ、見下ろし約 24°)。臨場感を出すため 21m 上の見下ろしから下げた
+  const CAM = { h: 8, back: 8, ahead: 7, fov: 58 };   // 自分は画面の 71% の高さ。届くいちばん遠い相手 (22m) とフラッグは帯の下に見える
+  // 構えている間は、狙う相手の方へ寄る (自分の 5m 後ろ・4m 上から、自分と相手のあいだを見る)
+  const AIM_CAM = { back: 5, up: 4, look: 0.55, rate: 8, holdMs: 150 };
+  // 自分が当てた瞬間は、当てた相手へ寄る (0.75 秒。寄る量はいちばん寄って 65%)
+  const HIT_CAM = { time: 0.75, dist: 6, up: 3.5, amount: 0.65 };
 
   const $ = (id) => document.getElementById(id);
   const els = {
@@ -698,7 +703,7 @@
       if (app.aim) return;
       e.preventDefault();
       capture(els.throwPad, e.pointerId);
-      app.aim = { id: e.pointerId, sx: e.clientX, sy: e.clientY, dx: 0, dy: 0, len: 0 };
+      app.aim = { id: e.pointerId, sx: e.clientX, sy: e.clientY, dx: 0, dy: 0, len: 0, t0: performance.now() };
       els.throwPad.classList.add('on');
       sound.unlock();
     });
@@ -989,6 +994,7 @@
             puff(e.x, e.y, e.z, 30, 1.8);
             app.slowT = 0.16;
             app.hitShake = HIT_SHAKE.time;          // 画面を一瞬だけ揺らす (すぐ収まる)
+            app.hitCam = { t: 0, x: e.x, z: e.z };    // 当てた相手へ寄る
             const now = performance.now() / 1000;
             app.combo.n = now - app.combo.t < 6 ? app.combo.n + 1 : 1;
             app.combo.t = now;
@@ -1082,6 +1088,59 @@
     camPos.copy(target.pos); camLook.copy(target.look);
   }
 
+  /**
+   * 寄りを重ねる。pos と look を書き換える。
+   * - 構え: 投げるを押さえている間 (かんたんは 0.15 秒より長く押さえたとき)、狙う相手の方へ寄る。なめらかに出入りする
+   * - 当てた瞬間: 当てた所へ寄って、0.75 秒で戻る (時間は実時間で進める。スローの間も同じ速さ)
+   */
+  function composeCam(dt, pos, look) {
+    const m = app.match, p = me();
+    const lockQ = app.lock && app.lock.target != null && m ? m.players[app.lock.target] : null;
+    const wantAim = !!(app.aim && !app.aimCancel && m && m.phase === 'play' && p && p.alive && lockQ && lockQ.alive &&
+      (m.aimMode === 'hard' || performance.now() - (app.aim.t0 || 0) > AIM_CAM.holdMs));
+    app.aimZoom = lerpN(app.aimZoom || 0, wantAim ? 1 : 0, dt * AIM_CAM.rate);
+    if (wantAim) app.aimCamQ = { x: lockQ.x, z: lockQ.z, px: p.x, pz: p.z };
+    const aq = app.aimCamQ;
+    if (app.aimZoom > 0.002 && aq) {
+      const w = app.aimZoom * app.aimZoom * (3 - 2 * app.aimZoom);     // なめらかに
+      let dx = aq.x - aq.px, dz = aq.z - aq.pz;
+      const d = Math.hypot(dx, dz) || 1; dx /= d; dz /= d;
+      pos.lerp(new T.Vector3(aq.px - dx * AIM_CAM.back, AIM_CAM.up, aq.pz - dz * AIM_CAM.back), w);
+      look.lerp(new T.Vector3(aq.px + (aq.x - aq.px) * AIM_CAM.look, 0.9, aq.pz + (aq.z - aq.pz) * AIM_CAM.look), w);
+    }
+    const hc = app.hitCam;
+    if (hc) {
+      hc.t += dt;
+      const t = hc.t, T0 = 0.12, T1 = 0.45;
+      const w = (t < T0 ? t / T0 : t < T1 ? 1 : Math.max(0, 1 - (t - T1) / (HIT_CAM.time - T1))) * HIT_CAM.amount;
+      let vx = pos.x - hc.x, vz = pos.z - hc.z;
+      const vl = Math.hypot(vx, vz) || 1; vx /= vl; vz /= vl;
+      pos.lerp(new T.Vector3(hc.x + vx * HIT_CAM.dist, HIT_CAM.up, hc.z + vz * HIT_CAM.dist), w);
+      look.lerp(new T.Vector3(hc.x, 0.9, hc.z), w);
+      app.hitCamW = w;
+      if (t >= HIT_CAM.time) { app.hitCam = null; app.hitCamW = 0; }
+    }
+  }
+
+  /** カメラから見て、その選手が壁に隠れているか (カメラ → 体の真ん中 の線が壁の箱を通るか) */
+  function hiddenByWall(p) {
+    const cx = camera.position.x, cy = camera.position.y, cz = camera.position.z;
+    const tx = p.x, ty = C.playerHeight(p) * 0.55, tz = p.z;
+    for (const s of C.SHELTERS) {
+      let t0 = 0, t1 = 1, ok = true;
+      for (const [a, b, lo, hi] of [[cx, tx, s.x - s.w / 2, s.x + s.w / 2], [cy, ty, 0, s.h], [cz, tz, s.z - s.d / 2, s.z + s.d / 2]]) {
+        const d = b - a;
+        if (Math.abs(d) < 1e-9) { if (a < lo || a > hi) { ok = false; break; } continue; }
+        let u = (lo - a) / d, v = (hi - a) / d;
+        if (u > v) { const w = u; u = v; v = w; }
+        t0 = Math.max(t0, u); t1 = Math.min(t1, v);
+        if (t0 > t1) { ok = false; break; }
+      }
+      if (ok && t1 < 0.999) return true;
+    }
+    return false;
+  }
+
   function camTarget(p) {
     const x = p ? p.x * 0.35 : 0;
     // あかの選手を追うとき (ビクトリースローのあかの番) は、反対側から見る
@@ -1164,9 +1223,12 @@
         if (v.spr) {
           const sm = v.spr.mesh;
           sm.visible = true;
-          sm.material.opacity = 1;
-          sm.material.depthTest = true;
-          sm.renderOrder = 3;
+          // 低いカメラでは壁に隠れやすい。自分と、狙っている相手だけは、壁に隠れたら透けて見せる
+          const xray = (p.id === m.human || (app.lock && app.lock.target === p.id)) && hiddenByWall(p);
+          sm.material.opacity = xray ? 0.6 : 1;
+          sm.material.depthTest = !xray;
+          sm.renderOrder = xray ? 5 : 3;
+          v.xray = xray;
           // 縦に伸ばす量は、その選手をカメラから見下ろす角度で決める。
           // 画面の上 (遠く) の選手ほど浅く見るので、決まった角度で伸ばすと遠くの選手が縦長になっていた (縦÷横 1.35)
           {
@@ -1230,7 +1292,10 @@
     stepPuffs(dt);
     updateAim();
 
+    // 追いかけるカメラ (camPos/camLook) に、構えたときと当てたときの寄りを重ねる
     camera.position.copy(camPos);
+    const look = camLook.clone();
+    composeCam(dt, camera.position, look);
     if (app.shake > 0) {
       app.shake -= dt;
       camera.position.x += (Math.random() - 0.5) * app.shake * 0.6;
@@ -1243,7 +1308,7 @@
       camera.position.x += Math.sin(t * 95) * a;
       camera.position.y += Math.cos(t * 77) * a * 0.7;
     }
-    camera.lookAt(camLook);
+    camera.lookAt(look);
     updateFans(performance.now() / 1000, Math.min(0.05, (performance.now() - (updateFans.last || performance.now())) / 1000)); updateFans.last = performance.now();
     renderer.render(scene, camera);
   }
@@ -1511,6 +1576,8 @@
       scene: () => scene,
       sound: (name, arg) => sound.measure(name, arg),
       hitShake: () => app.hitShake,
+      camInfo: () => ({ aimZoom: app.aimZoom || 0, hitCam: app.hitCamW || 0, pos: camera.position.toArray().map((v) => +v.toFixed(2)) }),
+      xray: (id) => !!(views.players[id] && views.players[id].xray),
       cancelState: () => ({ cancel: !!app.aimCancel, cls: els.throwPad.classList.contains('cancel') }),
       sprites: () => ({ ready: !!sprites.tex, failed: sprites.failed }),
       hudBottom: () => app.hudBottom,

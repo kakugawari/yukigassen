@@ -169,7 +169,7 @@ async function run() {
     });
     ok(view.shelter > view.bar && view.back > view.bar,
       `スタート地点から相手のシェルター (y${view.shelter})・バックライン (y${view.back}) が帯 (下端 y${view.bar}) に隠れない`);
-    ok(view.meY > 932 * 0.7 && view.meY < 932 * 0.82, `自分は画面の下寄り (y${view.meY} = ${Math.round(view.meY / 9.32)}%)`);
+    ok(view.meY > 932 * 0.64 && view.meY < 932 * 0.78, `自分は画面の下寄りで、投げるボタンに隠れない (y${view.meY} = ${Math.round(view.meY / 9.32)}%)`);
 
     // ---- 移動
     const center = async (sel) => phone.evaluate((s) => {
@@ -260,7 +260,7 @@ async function run() {
     await phone.waitForFunction(() => window.__app.me().aimF >= 1, null, { timeout: 3000 });
     await phone.waitForTimeout(100);
     const h2 = await phone.evaluate(() => ({ f: window.__app.me().aimF, crouch: window.__app.me().crouch,
-      ready: document.getElementById('throwPad').classList.contains('ready') }));
+      ready: document.getElementById('throwPad').classList.contains('ready'), cam: window.__app.camInfo() }));
     await phone.mouse.up();
     await phone.waitForTimeout(60);
     const h3 = await phone.evaluate(() => { const m = window.__app.match(); const n = m.balls.filter((b) => b.owner === m.human).length; m.balls = []; return { n, f: window.__app.me().aimF, rec: document.getElementById('throwPad').classList.contains('recover') }; });
@@ -270,6 +270,10 @@ async function run() {
     ok(h3.rec && !recEnd, '投げた直後はボタンが沈んで構え直し、終わると戻る');
     ok(h1.aiming && h1.f > 0.05 && h1.f < 0.8 && !h1.ready, `押さえ始めは構えの途中で、まだ赤くない (${h1.f.toFixed(2)})`);
     ok(h2.f === 1 && h2.ready, '押さえ続けると構えが定まり、投げるボタンが赤くなる');
+    ok(h2.cam.aimZoom > 0.8 && h2.cam.pos[1] < 5, `構えている間は、カメラが狙う相手の方へ寄る (寄り ${h2.cam.aimZoom.toFixed(2)}・高さ ${h2.cam.pos[1]}m)`);
+    await phone.waitForFunction(() => window.__app.camInfo().aimZoom < 0.05, null, { timeout: 6000 }).catch(() => {});
+    const camBack = await phone.evaluate(() => window.__app.camInfo());
+    ok(camBack.aimZoom < 0.05 && camBack.pos[1] > 7, `離すと、いつものカメラへ戻る (寄り ${camBack.aimZoom.toFixed(2)}・高さ ${camBack.pos[1]}m)`);
     ok(h1.crouch === false && h2.crouch === false, '構えている間は立つ');
     ok(h3.n === 1 && h3.f === 0, `離すと 1 個投げ、構えは 0 に戻る (投げた ${h3.n})`);
 
@@ -326,21 +330,48 @@ async function run() {
       await wait();
       const bar = A.hudBottom();
       const far = { lock: shown('markLock'), target: A.app.lock && A.app.lock.target, y: Math.round(A.project(q.x, 1.0, q.z).y), bar: Math.round(bar) };
-      // フラッグ: 遠くからは印、すぐそば (見えている) なら出さない
-      me.z = 10.5; await wait();
+      // フラッグ: 隠れているときだけ印。低いカメラでは遠くからも見えるので、隠れる場面は前の高いカメラで作る
+      A.setCam({ h: 21, back: 10, ahead: 7, fov: 52 });
+      me.z = 10.5; await wait(); await wait();
       const flagFar = shown('markFlag');
+      A.setCam({ h: 8, back: 8, ahead: 7, fov: 58 });
+      me.x = 0; me.z = 10.5; await wait(); await wait();
+      const flagStartLow = { shown: shown('markFlag'), y: Math.round(A.project(0, 1.5, -window.Core.R.FLAG_U).y), bar: Math.round(A.hudBottom()) };
       me.x = 2; me.z = -9; await wait();
       const flagNear = shown('markFlag');
       me.x = 0; me.z = 8;
       reds.forEach((p) => { p.alive = true; });
       style.remove();
       window.dispatchEvent(new Event('resize'));
-      return { near, far, flagFar, flagNear };
+      return { near, far, flagFar, flagNear, flagStartLow };
     }, setup);
     ok(marks.near.target === setup.left && !marks.near.lock, '狙っている相手が見えていれば、矢印は出さない');
     ok(marks.far.target === setup.left && marks.far.y > marks.far.bar && !marks.far.lock,
       `届くいちばん遠い相手 (22m) も帯の下に見える (相手 y${marks.far.y} / 帯 y${marks.far.bar})`);
     ok(marks.flagFar && !marks.flagNear, `相手のフラッグは、隠れているときだけ印を出す (遠く ${marks.flagFar} / そば ${marks.flagNear})`);
+    ok(!marks.flagStartLow.shown && marks.flagStartLow.y > marks.flagStartLow.bar, `低いカメラでは、スタート地点から相手のフラッグが帯の下に見えている (y${marks.flagStartLow.y} / 帯 ${marks.flagStartLow.bar})`);
+
+    // ---- 壁に隠れた「狙っている相手」は透けて見える (低いカメラでは壁に隠れやすい)。狙っていない相手は透けない
+    await phone.waitForFunction(() => window.__app.match().phase === 'play', null, { timeout: 15000 });
+    const xr = await phone.evaluate(async () => {
+      const A = window.__app, C = window.Core, m = A.match(), me = A.me();
+      const w = C.SHELTERS.find((x) => x.x > 0 && x.z < 0 && x.z > -10);         // あか陣の右のシェルター
+      const reds = m.players.filter((p) => p.team === 1 && p.alive);
+      const q = reds[0], other = reds[1];
+      reds.forEach((p) => { p.ai.think = 999; p.ai.goal = null; p.balls = 0; p.vx = p.vz = 0; if (p !== q && p !== other) { p.x = -4.5; p.z = -17; } });
+      me.x = w.x; me.z = 3;
+      q.x = w.x - 0.3; q.z = w.z - w.d / 2 - C.R.PLAYER_R - 0.05; q.standT = 0;    // 壁のすぐ裏にしゃがむ (狙う相手。立っていると胸から上は壁の上に見えている)
+      other.x = -4.6; other.z = 9.5;                                               // 自陣の奥 (狙いの外)
+      const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+      await wait(900);
+      const locked = A.app.lock && A.app.lock.target;
+      // 狙いの外の相手も、壁の裏へ置いて比べる
+      other.x = w.x + 0.6; other.z = q.z;
+      await wait(400);
+      return { locked, q: q.id, xq: A.xray(q.id), xo: A.app.lock && A.app.lock.target === other.id ? null : A.xray(other.id) };
+    });
+    ok(xr.locked === xr.q && xr.xq === true, `狙っている相手が壁に隠れると、透けて見える (狙い ${xr.locked})`);
+    ok(xr.xo === false || xr.xo === null, `狙っていない相手は、壁に隠れても透けない (${xr.xo})`);
 
     // ---- 当てたときの手応え: 目の前で止まっている相手に、構えてから当てる
     // (上ではじいた玉が当たってセットが終わっていることがあるので、プレー中に戻るのを待つ)
@@ -371,10 +402,12 @@ async function run() {
       pop: [...document.querySelectorAll('#pops .hit-text b')].map((e) => e.textContent),
       center: (() => { const e = document.querySelector('#pops .hit-text'); if (!e) return null; const r = e.getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2, w: r.width }; })(),
       shake: window.__app.hitShake(),
+      hitCam: window.__app.camInfo().hitCam,
       combo: window.__app.app.combo.n
     }), victim);
     await phone.waitForFunction(() => !document.querySelector('#pops .hit-text'), null, { timeout: 3000 }).catch(() => {});
-    const hitGone = await phone.evaluate(() => ({ left: document.querySelectorAll('#pops .hit-text').length, shake: window.__app.hitShake() }));
+    await phone.waitForFunction(() => window.__app.camInfo().hitCam === 0, null, { timeout: 6000 }).catch(() => {});
+    const hitGone = await phone.evaluate(() => ({ left: document.querySelectorAll('#pops .hit-text').length, shake: window.__app.hitShake(), hitCam: window.__app.camInfo().hitCam }));
     const bashi = await phone.evaluate(() => window.__app.sound('bashi'));
     // (直前のはじく確かめで当たっていれば、連続ヒットの言葉になる)
     const fans = await phone.evaluate(() => window.__app.scenery());
@@ -383,6 +416,7 @@ async function run() {
     ok(juice.center && Math.abs(juice.center.x - 215) < 30 && juice.center.y > 300 && juice.center.y < 560 && juice.center.w > 200, `HIT!! は画面の真ん中に大きく出る (${juice.center && Math.round(juice.center.x)}, ${juice.center && Math.round(juice.center.y)} / 幅 ${juice.center && Math.round(juice.center.w)})`);
     ok(juice.shake > 0 && hitGone.shake === 0, `当てた瞬間だけ画面が揺れ、すぐ収まる (${juice.shake.toFixed(2)} → ${hitGone.shake})`);
     ok(hitGone.left === 0, 'HIT!! は消える (残らない)');
+    ok(juice.hitCam > 0 && hitGone.hitCam === 0, `当てた瞬間はカメラが当てた相手へ寄り、すぐ戻る (${juice.hitCam.toFixed(2)} → ${hitGone.hitCam})`);
     // セットの決着も真ん中に大きく。縁は勝ったチームの色。HIT!! が出ている間は、それが消えてから出す
     const setRes = await phone.evaluate(async () => {
       const A = window.__app, m = A.match();

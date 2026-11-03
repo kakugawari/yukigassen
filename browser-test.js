@@ -116,6 +116,15 @@ async function run() {
     }));
     ok(fit.wide <= 1, '横スクロールが出ない');
     ok(fit.title.includes('雪合戦'), `タイトルが出ている (${fit.title})`);
+    // ホーム画面のアイコン: iOS は SVG を使えないので PNG (180x180)。読めて、大きさが合っている
+    const icon = await phone.evaluate(async () => {
+      const l = document.querySelector('link[rel="apple-touch-icon"]');
+      if (!l) return null;
+      const img = new Image(); img.src = l.href;
+      await img.decode().catch(() => {});
+      return { href: l.getAttribute('href'), w: img.naturalWidth, h: img.naturalHeight };
+    });
+    ok(icon && /\.png$/.test(icon.href) && icon.w === 180 && icon.h === 180, `ホーム画面のアイコンは PNG 180x180 で読める (${JSON.stringify(icon)})`);
     ok(fit.hudHidden, 'タイトルの間は試合の表示と操作が隠れている');
 
     // ------------------------------------------------ 試合を始める

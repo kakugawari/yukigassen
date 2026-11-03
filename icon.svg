@@ -1,8 +1,56 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512" role="img" aria-label="雪合戦 フラッグ7">
-  <rect width="512" height="512" rx="108" fill="#bcd8f0"/>
-  <rect x="300" y="90" width="16" height="300" rx="8" fill="#5b6575"/>
-  <path d="M316 100 L430 140 L316 180 Z" fill="#e0413a"/>
-  <circle cx="200" cy="300" r="120" fill="#ffffff"/>
-  <circle cx="170" cy="270" r="30" fill="#e6f1fb"/>
-  <circle cx="240" cy="345" r="22" fill="#d7e8f7"/>
+  <defs>
+    <linearGradient id="sky" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#7cc4ff"/>
+      <stop offset="1" stop-color="#2f6fe0"/>
+    </linearGradient>
+    <radialGradient id="ball" cx="0.38" cy="0.34" r="0.75">
+      <stop offset="0" stop-color="#ffffff"/>
+      <stop offset="0.62" stop-color="#f1f7fe"/>
+      <stop offset="1" stop-color="#b9d3ee"/>
+    </radialGradient>
+    <linearGradient id="snow" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ffffff"/>
+      <stop offset="1" stop-color="#dcebf9"/>
+    </linearGradient>
+    <clipPath id="r"><rect width="512" height="512" rx="0"/></clipPath>
+  </defs>
+  <g clip-path="url(#r)">
+    <!-- 空 (あおの色) -->
+    <rect width="512" height="512" fill="url(#sky)"/>
+    <!-- 降る雪 -->
+    <g fill="#ffffff" opacity=".75">
+      <circle cx="70" cy="80" r="7"/><circle cx="160" cy="44" r="5"/><circle cx="250" cy="96" r="6"/>
+      <circle cx="455" cy="60" r="6"/><circle cx="110" cy="190" r="5"/><circle cx="470" cy="250" r="5"/>
+    </g>
+    <!-- 雪の丘 -->
+    <path d="M0 392 Q140 330 290 360 T512 344 L512 512 L0 512 Z" fill="url(#snow)"/>
+    <path d="M0 392 Q140 330 290 360 T512 344" fill="none" stroke="#c4dcf2" stroke-width="6"/>
+    <!-- フラッグ (あかの旗に雪の結晶) -->
+    <rect x="356" y="112" width="15" height="252" rx="7" fill="#4b5566"/>
+    <circle cx="363.5" cy="110" r="13" fill="#ffd34d"/>
+    <path d="M371 128 C410 118 438 140 470 128 L470 224 C438 236 410 214 371 224 Z" fill="#e0413a"/>
+    <path d="M371 128 C410 118 438 140 470 128 L470 146 C438 158 410 136 371 146 Z" fill="#ff6f62" opacity=".6"/>
+    <g stroke="#ffffff" stroke-width="7" stroke-linecap="round" transform="translate(421 176)">
+      <line x1="0" y1="-25" x2="0" y2="25"/>
+      <line x1="-21.6" y1="-12.5" x2="21.6" y2="12.5"/>
+      <line x1="-21.6" y1="12.5" x2="21.6" y2="-12.5"/>
+    </g>
+    <!-- 飛んでいく雪玉の筋 -->
+    <g stroke="#ffffff" stroke-linecap="round" opacity=".85">
+      <line x1="34" y1="236" x2="128" y2="252" stroke-width="16"/>
+      <line x1="50" y1="300" x2="132" y2="300" stroke-width="12" opacity=".8"/>
+      <line x1="70" y1="352" x2="140" y2="340" stroke-width="9" opacity=".7"/>
+    </g>
+    <!-- 雪玉 -->
+    <circle cx="232" cy="292" r="104" fill="#1d4fb0" opacity=".18" transform="translate(8 14)"/>
+    <circle cx="232" cy="292" r="104" fill="url(#ball)"/>
+    <circle cx="232" cy="292" r="104" fill="none" stroke="#9fbfe2" stroke-width="5"/>
+    <circle cx="196" cy="252" r="22" fill="#ffffff"/>
+    <circle cx="262" cy="336" r="13" fill="#d3e4f6"/>
+    <circle cx="290" cy="270" r="9" fill="#d3e4f6"/>
+    <!-- 7 の札 -->
+    <circle cx="420" cy="432" r="58" fill="#ffd34d" stroke="#ffffff" stroke-width="10"/>
+    <text x="420" y="458" text-anchor="middle" font-family="Arial Black, Arial, sans-serif" font-weight="900" font-size="78" font-style="italic" fill="#1d4fb0">7</text>
+  </g>
 </svg>

@@ -10,7 +10,7 @@ let html = read('index.html');
 // </script> が中に入っていても途切れないように
 const safe = (js) => js.replace(/<\/script/gi, '<\\/script');
 html = html.replace('<link rel="stylesheet" href="./styles.css">', () => `<style>\n${read('styles.css')}\n</style>`);
-html = html.replace(/<link rel="icon"[^>]*>\n?/, '');
+html = html.replace(/<link rel="(?:icon|apple-touch-icon)"[^>]*>\n?/g, '');   // 仮ページではアイコンは Claude のものになる
 // 絵は data: URI にして埋め込む (app.js は window.ASSETS があればそちらを読む)
 const assets = {};
 const MIME = { '.webp': 'image/webp', '.jpg': 'image/jpeg', '.png': 'image/png' };

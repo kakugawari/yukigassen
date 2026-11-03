@@ -98,6 +98,9 @@ three.min.js              three.js r160 (MIT)。手を入れない
 bundle.js                 テストプレイ用に 1 枚の HTML へまとめる (絵は data: URI で埋め込む)
 players.webp              選手の絵 (art/make_sprites.py が作る。手で直さない)
 tex_*.jpg                 地面・壁・旗の絵 (art/make_court.py が作る。手で直さない)
+icon.svg                  アイコンの元 (雪玉・あかのフラッグ・7 の札)。直したら PNG を作り直す
+apple-touch-icon.png      ホーム画面のアイコン (180x180)。iOS は SVG を使えない。icon.svg をブラウザで描いて作る
+icon-512.png              大きいアイコン (512x512)。同じく icon.svg から
 ASSETS.md                 画像に置き換える物の一覧 (大きさ・形式・背景の抜き方)
 PROMPT_PLAYERS.md         選手の絵を生成するときの指示 (英語の指示文つき)
 PROMPT_COURT.md           コートと壁 (雪面・シェルター・シャトー・旗) の絵を生成するときの指示

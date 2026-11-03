@@ -633,6 +633,25 @@ async function run() {
     const ezBall = await ez.evaluate(() => { const m = window.__app.match(); return m.balls.filter((b) => b.owner === m.human).map((b) => b.home); });
     ok(ezSet.mode === 'easy' && ezPadClass, 'かんたん: 押さえなくても、当たるコースなら投げるボタンが赤い');
     ok(ezBall.length === 1 && ezBall[0] === ezSet.foe, `かんたん: すぐ離しても投げ、玉が狙った相手を追う (${JSON.stringify(ezBall)})`);
+    // のぞき投げ: 自陣のシェルターのすぐ裏でタップすると、端から出て投げ、元の所へ戻る
+    await ez.waitForFunction(() => window.__app.me().cd <= 0, null, { timeout: 3000 });
+    const pkSet = await ez.evaluate(() => {
+      const m = window.__app.match(), me = window.__app.me(), C = window.Core;
+      m.balls = [];
+      const w = C.SHELTERS.find((x) => x.x > 0 && x.z > 0 && x.z < 10);
+      me.x = w.x + 0.3; me.z = w.z + w.d / 2 + C.R.PLAYER_R + 0.02; me.balls = 3; me.cd = 0;
+      const foe = m.players.find((p) => p.team === 1 && p.alive);
+      foe.x = w.x; foe.z = -5; foe.vx = foe.vz = 0;
+      return { hx: me.x, hz: me.z, edge: w.x + w.w / 2 };
+    });
+    await ez.waitForTimeout(100);
+    await ez.mouse.click(ezPad.x, ezPad.y);
+    await ez.waitForFunction(() => { const m = window.__app.match(); return m.balls.some((b) => b.owner === m.human); }, null, { timeout: 3000 }).catch(() => {});
+    const pkThrow = await ez.evaluate(() => { const me = window.__app.me(); window.__app.match().balls = []; return { x: me.x, peek: !!me.peek }; });
+    await ez.waitForFunction(() => !window.__app.me().peek, null, { timeout: 4000 }).catch(() => {});
+    const pkBack = await ez.evaluate(() => { const me = window.__app.me(); return { x: me.x, z: me.z, peek: !!me.peek }; });
+    ok(pkThrow.peek && pkThrow.x > pkSet.edge, `壁の裏でタップすると、壁の端から出て投げる (投げた x ${pkThrow.x.toFixed(2)} / 壁の端 ${pkSet.edge.toFixed(2)})`);
+    ok(!pkBack.peek && Math.hypot(pkBack.x - pkSet.hx, pkBack.z - pkSet.hz) < 0.25, '投げ終わると、元の所 (壁の裏) へ戻る');
     await ez.click('#btnPause'); await ez.click('#btnQuit');
     await ez.click('.diff button[data-mode="hard"]');
     await ez.reload();

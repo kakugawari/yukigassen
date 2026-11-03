@@ -235,7 +235,7 @@ test('狙いの補助: はじいた向きの相手を選ぶ。40° 以内にい�
   assert.ok(C.pickTarget(m, me, null), 'はじかなければ前方のだれか');
 });
 
-test('狙いの補助: 走っている相手にも、壁の陰に立つ相手にも当たる', () => {
+test('狙いの補助: 走っている相手に当たる。壁のすぐ裏に立つ相手は狙わず、のぞいて出たら当たる', () => {
   // 走っている相手 (横へ 4.3m/s): 先読みして当たる
   let hits = 0;
   for (let k = 0; k < 10; k++) {
@@ -258,19 +258,22 @@ test('狙いの補助: 走っている相手にも、壁の陰に立つ相手に
     if (!q.alive) hits++;
   }
   assert.ok(hits >= 9, `走る相手に ${hits}/10`);
-  // 中央シェルターの陰に立っている相手: 足もとは壁に止まるので、奥へ落として頭越しに
+  // 中央シェルターのすぐ裏に立っている相手: 頭越しには狙わない (当たるコースにならない)
   const m = playing({ human: 1 });
   isolate(m, [1, 7]);
   const me = m.players[1], q = m.players[7];
   me.x = 0.5; me.z = 9; me.balls = 1;
   q.x = 0.3; q.z = -BEHIND; q.vx = q.vz = 0; q.standT = 9; q.ai.think = 999; q.ai.seen = new Proxy({}, { get: () => true });   // 中央シェルターのすぐ裏に立ったまま
+  assert.ok(!C.assistAim(m, me, null, q).clear, '壁のすぐ裏の相手は、当たるコースにならない');
+  // 相手が壁の端から出る (のぞく) と、当たるコースになって当たる
+  const cs = C.SHELTERS.find((s) => s.x === 0 && s.z === 0);
+  q.x = -(cs.w / 2 + R.PLAYER_R + R.PEEK_OUT);
   const aim = C.assistAim(m, me, null, q);
-  assert.ok(aim.clear, '当たるコースが見つかる');
-  assert.ok(aim.z < q.z - 1, `相手より奥へ落とす (着地 z=${aim.z.toFixed(2)})`);
+  assert.ok(aim.clear, 'のぞいて出た相手は、当たるコースになる');
   me.aimF = 1;
   C.throwBall(m, me, aim.x, aim.z);
   run(m, 1.2, { crouch: true });
-  assert.ok(!q.alive, '頭越しに当たる');
+  assert.ok(!q.alive, 'のぞいて出た相手に当たる');
 });
 
 test('構え: 押さえて定まってから離すと当たり、すぐ離す (連打) と外れる', () => {
@@ -361,6 +364,75 @@ test('かんたん: 押してすぐ投げても当たり、玉が向きを変え
   ai.balls = 1; ai.cd = 0;
   const b = C.throwBall(m, ai, 0, 5, 1);
   assert.equal(b.home, null, 'AI の玉は追わない');
+});
+
+test('のぞき投げ: 壁の裏で投げると、近い方の端から出て投げ、終わると元の所へ戻る', () => {
+  for (const mode of ['easy', 'hard']) {
+    const m = playing({ human: 1, aimMode: mode });
+    isolate(m, [1, 7]);
+    const me = m.players[1], q = m.players[7];
+    // 自陣右のシェルターのすぐ裏 (中心より少し右)。相手はその先の正面
+    const s = C.SHELTERS.find((w) => w.x > 0 && w.z > 0 && w.z < 10);
+    me.x = s.x + 0.3; me.z = s.z + s.d / 2 + R.PLAYER_R + 0.02; me.balls = 2; me.cd = 0;
+    q.x = s.x; q.z = -5; q.vx = q.vz = 0; q.standT = 99; q.ai.think = 999; q.ai.seen = new Proxy({}, { get: () => true });
+    const home = { x: me.x, z: me.z };
+    assert.ok(C.coverWall(me, q.x, q.z) === s, '壁が投げる向きをふさいでいる');
+    const aim = C.assistAim(m, me, null, q);
+    // easy はタップ、hard は押さえて構えてから離す
+    if (mode === 'hard') run(m, R.AIM_STEADY + 0.5, { aiming: true });
+    let from = null;
+    const tap = { throwAt: { x: aim.x, z: aim.z, target: q.id } };
+    for (let i = 0; i < 120 && !from; i++) {
+      C.step(m, 1 / 60, i === 0 ? tap : (mode === 'hard' ? {} : { crouch: true }));
+      const e = C.drainEvents(m).find((ev) => ev.type === 'throw' && ev.player === me.id);
+      if (e) from = { x: me.x, z: me.z, t: i / 60 };
+    }
+    assert.ok(from, `${mode}: 投げた`);
+    assert.ok(from.x > s.x + s.w / 2 + R.PLAYER_R - 0.05, `${mode}: 近い方 (右) の端から出て投げた (x ${from.x.toFixed(2)} / 端 ${(s.x + s.w / 2).toFixed(2)})`);
+    assert.ok(from.t < 0.6, `${mode}: 出るまで 0.6 秒以内 (${from.t.toFixed(2)})`);
+    run(m, 1.6, { crouch: true });
+    assert.ok(Math.hypot(me.x - home.x, me.z - home.z) < 0.2, `${mode}: 元の所へ戻った`);
+    assert.equal(me.peek, null);
+  }
+});
+
+test('のぞき投げ: 出ている途中で移動を入れると、やめてその場で動ける', () => {
+  const m = playing({ human: 1, aimMode: 'easy' });
+  isolate(m, [1, 7]);
+  const me = m.players[1], q = m.players[7];
+  const s = C.SHELTERS.find((w) => w.x > 0 && w.z > 0 && w.z < 10);
+  me.x = s.x + 0.3; me.z = s.z + s.d / 2 + R.PLAYER_R + 0.02; me.balls = 2; me.cd = 0;
+  q.x = s.x; q.z = -5; q.ai.think = 999;
+  C.step(m, 1 / 60, { throwAt: { x: q.x, z: q.z, target: q.id } });
+  assert.ok(me.peek, 'のぞき始めた');
+  C.step(m, 1 / 60, { mx: 0, mz: 1 });
+  assert.equal(me.peek, null, '移動を入れたら、のぞくのをやめる');
+  assert.equal(me.balls, 2, '投げていない');
+});
+
+test('のぞき投げ: AI どうしで 6 試合、壁にふさがれたまま投げた球は 0', () => {
+  let blocked = 0, thrown = 0, peeks = 0;
+  for (let seed = 1; seed <= 6; seed++) {
+    const m = C.createMatch({ seed, human: null });
+    let g = 0;
+    const pos = {};
+    while (m.phase !== 'matchOver' && g++ < 60 * 60 * 12) {
+      C.step(m, 1 / 60);
+      for (const e of C.drainEvents(m)) {
+        if (e.type === 'peek') peeks++;
+        if (e.type !== 'throw') continue;
+        thrown++;
+        const p = m.players[e.player], b = m.balls.find((x) => x.id === e.ball);
+        if (!b) continue;
+        // 投げた向きの、体のすぐ先に壁があったら「壁越し」
+        const L = Math.hypot(b.vx, b.vz);
+        const s = C.blockingShelter(p.x, p.z, p.x + b.vx / L * (R.PLAYER_R + R.PEEK_NEAR), p.z + b.vz / L * (R.PLAYER_R + R.PEEK_NEAR), 0);
+        if (s) blocked++;
+      }
+    }
+  }
+  assert.ok(thrown > 500 && peeks > 50, `投げた ${thrown}・のぞいた ${peeks}`);
+  assert.equal(blocked, 0, `壁にふさがれたまま投げた ${blocked}/${thrown}`);
 });
 
 test('フラッグはバックスが抜いてもよい', () => {

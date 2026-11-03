@@ -7,7 +7,7 @@
   const C = window.Core;
   const R = C.R;
   const T = window.THREE;
-  const VERSION = 'v9';
+  const VERSION = 'v10';
   const AI_SKILL = 0.5;      // 相手の強さ (前の「ふつう」)。強さのえらびはやめ、投げ方をえらぶ
   const AUTO_CROUCH = 0.2;   // 止まってからしゃがむまで (秒)
   // カメラ: 自分の (h) 上・(back) 後ろから、(ahead) 先の地面を見る

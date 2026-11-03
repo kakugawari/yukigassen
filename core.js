@@ -42,6 +42,10 @@
     THROW_CD: 0.9,        // 投げたあと構え直す時間。この間は次を投げられず、構えも始まらない (連打できない)
     AIM_STEADY: 0.6,      // 人の構え: 投げるボタンを押さえてから狙いが定まるまで (秒)。走っていると 2 倍かかる
     AIM_SPREAD: 2.4,      // 構えが 0 のとき (すぐ離した) の狙いのぶれ (m、20m 先で)。連打すると当たらない
+    SHADOW: 1.3,          // 壁のふちからこの距離までの裏にいる相手へは、頭越しに狙わない (のぞくのを待つ)
+    PEEK_NEAR: 0.6,       // 壁からこれより近く (体のふちから) にいて、壁越しに投げるなら「のぞき投げ」
+    PEEK_OUT: 0.25,       // のぞくとき、壁の端からさらに出る量 (体の半径に足す)
+    PEEK_MAX: 2.5,        // のぞいたまま待つ上限 (秒)
     HOMING_TURN: 2.0,     // かんたん: 人の玉が相手へ曲がる速さ (rad/s、水平だけ)
     MAKE_TIME: 0.6,       // 1 個丸める時間 (0.9 秒では、生きている時間の 6 割が雪玉 0 個だった)
     MAX_CARRY: 3,         // 一度に持てる数。使い切ったら、しゃがんで丸め直す (その間は攻められない)
@@ -224,6 +228,7 @@
    */
   function stepAim(m, p, input, dt) {
     if (m.aimMode === 'easy') { p.aimF = 1; return input; }    // かんたん: 構えは要らない (いつも定まっている)
+    if (p.peek && p.peek.shot && p.peek.phase !== 'back') return input;   // のぞいている途中で離した: 構えはそのまま、出たら投げる
     if (!input.aiming || p.balls <= 0 || p.cd > 0) { p.aimF = 0; return input; }   // 構え直している間は 0 から
     const moving = Math.hypot(input.mx || 0, input.mz || 0) > 0.05;
     p.aimF = Math.min(1, p.aimF + dt / (R.AIM_STEADY * (moving ? 2 : 1)));
@@ -557,12 +562,25 @@
     return null;
   }
 
-  /** 的に当たる着地点を探す。足もとが壁に隠れていれば、奥を狙って頭越しに落とす。 */
+  /** 壁 (箱) のふちまでの水平の距離 */
+  function boxDist(x, z, s) {
+    const dx = Math.max(Math.abs(x - s.x) - s.w / 2, 0), dz = Math.max(Math.abs(z - s.z) - s.d / 2, 0);
+    return Math.hypot(dx, dz);
+  }
+
+  /**
+   * 的に当たる着地点を探す。足もとが壁に隠れていれば、奥を狙って頭越しに落とす。
+   * ただし、壁のすぐ裏 (R.SHADOW 以内) にいる相手への頭越しはやめた (届かないことにする)。
+   * 壁のすぐ裏の相手を当てるには、相手がのぞいて出てくるのを待つか、横から回り込む。
+   */
   function findAim(players, team, x, z, q, ax, az) {
     const dx = ax - x, dz = az - z;
     const d = Math.hypot(dx, dz) || 1;
     const ghost = [{ alive: true, team: q.team, x: ax, z: az, crouch: q.crouch, standT: q.standT }];
+    const wall = blockingShelter(x, z, ax, az, 0);
+    const shadowed = !!wall && boxDist(ax, az, wall) < R.SHADOW;
     for (const off of [0, 1.5, 3, 3.8, 4.6, 5.5]) {
+      if (off > 0 && shadowed) break;
       const tx = ax + dx / d * off, tz = az + dz / d * off;
       if (Math.hypot(tx - x, tz - z) > R.RANGE + 0.3) break;
       if (predictHit(ghost, team, x, z, tx, tz)) return { x: tx, z: tz, off };
@@ -588,7 +606,8 @@
     if (!best) return null;
     // 走っている的ほど外れやすい (先読みしても、向きを変えられるとずれる)
     const err = lerp(1.7, 0.7, s) * (0.6 + best.d / R.RANGE) + best.mv * lerp(0.45, 0.25, s);
-    return { x: best.ax + gauss(m.rng) * err, z: best.az + gauss(m.rng) * err };
+    const ex = gauss(m.rng) * err, ez = gauss(m.rng) * err;
+    return { x: best.ax + ex, z: best.az + ez, target: best.q.id, ex, ez };
   }
 
   /**
@@ -969,6 +988,101 @@
     m.events.push({ type: 'handOver', player: m.human });
   }
 
+  // ------------------------------------------------------------ のぞき投げ
+  /**
+   * 壁のすぐ裏にいて、投げる向きを自分の壁がふさいでいれば、その壁を返す。
+   * (壁の上を越えて投げるのではなく、横へ出て投げる)
+   */
+  function coverWall(p, tx, tz) {
+    const dx = tx - p.x, dz = tz - p.z;
+    const d = Math.hypot(dx, dz);
+    if (d < 1e-6) return null;
+    const reach = R.PLAYER_R + R.PEEK_NEAR;
+    const s = blockingShelter(p.x, p.z, p.x + dx / d * reach, p.z + dz / d * reach, 0);
+    return s;
+  }
+
+  /**
+   * 壁の端から出た所。そこから狙う所までが、どの壁にもふさがれない端を選ぶ (両方よければ近い方)。
+   * どちらからも届かなければ null (のぞいても投げられない)。
+   */
+  function peekSpot(p, s, tx, tz) {
+    const half = s.w / 2 + R.PLAYER_R + R.PEEK_OUT;
+    const ends = [s.x - half, s.x + half]
+      .filter((x) => Math.abs(x) <= R.HALF_W - R.PLAYER_R)
+      .sort((a, b) => Math.abs(a - p.x) - Math.abs(b - p.x));
+    for (const x of ends) if (!coverWall({ x, z: p.z }, tx, tz)) return { x, z: p.z };
+    return null;
+  }
+
+  /** のぞき投げを始める。出られる端が無ければ false */
+  function startPeek(m, p, shot) {
+    const t = shot || { x: p.x, z: p.z - side(p.team) * 10 };
+    const s = coverWall(p, t.x, t.z);
+    if (!s) return false;
+    const sp = peekSpot(p, s, t.x, t.z);
+    if (!sp) { p.peek = null; return true; }     // ふさがれていて、どちらの端からも届かない: 投げない
+    p.peek = { phase: 'out', sx: sp.x, sz: sp.z, hx: p.x, hz: p.z, shot: shot || null, t: 0 };
+    m.events.push({ type: 'peek', player: p.id });
+    return true;
+  }
+
+  /** のぞいた先で、狙い直す (相手を選んでいたなら、出た所から先読みし直す) */
+  function reaim(m, p, shot) {
+    const q = shot.target != null ? m.players[shot.target] : null;
+    if (!q || !q.alive) return shot;
+    const a = assistAim(m, p, null, q);
+    if (!a) return shot;
+    return { x: a.x + (shot.ex || 0), z: a.z + (shot.ez || 0), target: shot.target };
+  }
+
+  /**
+   * のぞき投げを進める。input を書き換えて返す。
+   *   out  : 壁の端へ出る (立っている。当たる)
+   *   ready: 出た。投げる (むずかしいの人は、離すまで構えたまま待つ)
+   *   back : 投げたあと、立っている時間 (STAND_AFTER_THROW) が過ぎたら元の所へ戻る
+   * 人が移動を入れたら、そこでやめる。
+   */
+  function stepPeek(m, p, inp, dt) {
+    const human = isHuman(m, p);
+    let pk = p.peek;
+    if (pk && human && Math.hypot(inp.mx || 0, inp.mz || 0) > 0.05) { p.peek = null; return inp; }
+    if (!pk) {
+      const wantThrow = inp.throwAt && canThrow(p);
+      const wantAim = human && inp.aiming && p.balls > 0 && p.cd <= 0;
+      if (!wantThrow && !wantAim) return inp;
+      if (!startPeek(m, p, inp.throwAt)) return inp;
+      if (!p.peek) return Object.assign({}, inp, { throwAt: null });
+      pk = p.peek;
+    }
+    const out = { mx: 0, mz: 0, crouch: false, aiming: inp.aiming, throwAt: null };
+    pk.t += dt;
+    if (inp.throwAt && pk.phase !== 'back') pk.shot = inp.throwAt;     // むずかしい: 出ている途中で離した
+    const go = (gx, gz) => {
+      const dx = gx - p.x, dz = gz - p.z, d = Math.hypot(dx, dz);
+      if (d < 0.08) return true;
+      const k = Math.min(1, d / (R.SPEED * dt)) / d;     // 行き過ぎない
+      out.mx = dx * k; out.mz = dz * k;
+      return false;
+    };
+    if (pk.phase === 'out' && (go(pk.sx, pk.sz) || pk.t > 1.2)) pk.phase = 'ready';
+    if (pk.phase === 'ready') {
+      if (pk.shot && canThrow(p)) {
+        const shot = reaim(m, p, pk.shot);
+        if (!coverWall(p, shot.x, shot.z)) out.throwAt = shot;   // 出た所からもふさがれていたら投げない (相手が動いた)
+        pk.phase = 'back'; pk.t = 0;
+      } else if (!(human && inp.aiming && p.balls > 0) || pk.t > R.PEEK_MAX || (pk.shot && !canThrow(p))) {
+        pk.phase = 'back'; pk.t = 0;
+      }
+    } else if (pk.phase === 'back' && p.standT <= 0 && !out.throwAt) {
+      if (go(pk.hx, pk.hz) || pk.t > 2) {
+        p.peek = null;
+        p.face = p.team === 0 ? Math.PI : 0;      // 戻ったら相手の方を向く (戻る向きのままだと後ろを向いて見える)
+      }
+    }
+    return out;
+  }
+
   // ------------------------------------------------------------ 1 コマ進める
   /**
    * @param {object} m 試合
@@ -1008,8 +1122,12 @@
         const thr = inp.throwAt;     // 離した瞬間に投げる: そのコマまでの構えで決まる
         inp = stepAim(m, p, thr ? Object.assign({}, inp, { aiming: true }) : inp, thr ? 0 : dt);
       }
+      inp = stepPeek(m, p, inp, dt);
       movePlayer(p, inp, dt);
-      if (inp.throwAt) throwBall(m, p, inp.throwAt.x, inp.throwAt.z, inp.throwAt.target);
+      if (inp.throwAt) {
+        // 動いた拍子に壁のすぐ裏へ入っていたら、投げずにのぞき投げに切り替える
+        if (p.peek || !startPeek(m, p, inp.throwAt)) throwBall(m, p, inp.throwAt.x, inp.throwAt.z, inp.throwAt.target);
+      }
       makeBalls(m, p, dt);
     }
     separate(m.players);
@@ -1032,6 +1150,6 @@
     createMatch, startSet, step, drainEvents,
     launch, trajectory, predictHit, findAim, throwBall, ballCollide, playerHeight,
     movePlayer, pushOutOfShelters, limits, aliveCount, steer, blockingShelter,
-    aiInput, threatOf, inEnemyCourt, enemyCourtCount, setPoints, startVT, hitsFlag, predictVT, pickTarget, assistAim, aimSpread
+    aiInput, threatOf, inEnemyCourt, enemyCourtCount, setPoints, startVT, hitsFlag, predictVT, pickTarget, assistAim, aimSpread, coverWall
   };
 });

@@ -40,6 +40,8 @@
     SPEED: 4.3,           // 走る速さ
     STAND_AFTER_THROW: 0.45, // 投げたあと立っている時間 (この間は隠れていても当たる)
     THROW_CD: 0.5,
+    AIM_STEADY: 0.6,      // 人の構え: 投げるボタンを押さえてから狙いが定まるまで (秒)。走っていると 2 倍かかる
+    AIM_SPREAD: 2.4,      // 構えが 0 のとき (すぐ離した) の狙いのぶれ (m、20m 先で)。連打すると当たらない
     MAKE_TIME: 0.6,       // 1 個丸める時間 (0.9 秒では、生きている時間の 6 割が雪玉 0 個だった)
     MAX_CARRY: 5,
     START_CARRY: 3,
@@ -177,6 +179,7 @@
       alive: true, outAt: 0,
       crouch: false, standT: 0,
       balls: R.START_CARRY, makeT: 0, cd: 0,
+      aimF: 0,                      // 構え (0..1)。人が投げるボタンを押さえている間だけ増える
       ai: { think: 0, goal: null, spot: -1, holdT: 0, dodgeT: 0, dx: 0, dz: 0, seen: {}, rush: false }
     };
   }
@@ -205,8 +208,31 @@
 
   function canThrow(p) { return p.alive && p.balls > 0 && p.cd <= 0; }
 
+  /** 人の狙いのぶれ (標準偏差 m)。構えが定まるほど小さい。遠いほど大きい */
+  function aimSpread(p, tx, tz) {
+    const d = Math.min(Math.hypot(tx - p.x, tz - p.z), R.RANGE);
+    return R.AIM_SPREAD * (1 - p.aimF) * (0.4 + 0.6 * d / 20);
+  }
+
+  /**
+   * 構え: 投げるボタンを押さえている間 (input.aiming) だけ定まっていく。
+   * 止まっていれば AIM_STEADY 秒、走っていればその倍。構えている間は立つ (隠れていても当たる)。
+   * 離せば 0 に戻る。
+   */
+  function stepAim(p, input, dt) {
+    if (!input.aiming || p.balls <= 0) { p.aimF = 0; return input; }
+    const moving = Math.hypot(input.mx || 0, input.mz || 0) > 0.05;
+    p.aimF = Math.min(1, p.aimF + dt / (R.AIM_STEADY * (moving ? 2 : 1)));
+    return input.crouch ? Object.assign({}, input, { crouch: false }) : input;
+  }
+
   function throwBall(m, p, tx, tz) {
     if (!canThrow(p) || m.phase !== 'play') return null;
+    if (isHuman(m, p)) {
+      const e = aimSpread(p, tx, tz);
+      if (e > 0) { tx += gauss(m.rng) * e; tz += gauss(m.rng) * e; }
+      p.aimF = 0;
+    }
     const L = launch(p.x, p.z, tx, tz);
     const b = {
       id: m.nextBallId++, team: p.team, owner: p.id,
@@ -843,7 +869,7 @@
         at = { x: aim.x + gauss(m.rng) * err, z: aim.z + gauss(m.rng) * err * 1.4 };
       }
       if (at) {
-        p.balls = 1; p.cd = 0;
+        p.balls = 1; p.cd = 0; p.aimF = 1;   // ビクトリースローは補助もぶれも無し (腕試し)
         m.phase = 'play';             // throwBall は play 中だけ受け付ける
         const b = throwBall(m, p, at.x, at.z);
         m.phase = 'vt';
@@ -949,7 +975,11 @@
       if (!p.alive) continue;
       p.cd = Math.max(0, p.cd - dt);
       p.standT = Math.max(0, p.standT - dt);
-      const inp = isHuman(m, p) ? (input || {}) : aiInput(m, p, dt);
+      let inp = isHuman(m, p) ? (input || {}) : aiInput(m, p, dt);
+      if (isHuman(m, p)) {
+        const thr = inp.throwAt;     // 離した瞬間に投げる: そのコマまでの構えで決まる
+        inp = stepAim(p, thr ? Object.assign({}, inp, { aiming: true }) : inp, thr ? 0 : dt);
+      }
       movePlayer(p, inp, dt);
       if (inp.throwAt) throwBall(m, p, inp.throwAt.x, inp.throwAt.z);
       makeBalls(m, p, dt);
@@ -974,6 +1004,6 @@
     createMatch, startSet, step, drainEvents,
     launch, trajectory, predictHit, findAim, throwBall, ballCollide, playerHeight,
     movePlayer, pushOutOfShelters, limits, aliveCount, steer, blockingShelter,
-    aiInput, threatOf, inEnemyCourt, enemyCourtCount, setPoints, startVT, hitsFlag, predictVT, pickTarget, assistAim
+    aiInput, threatOf, inEnemyCourt, enemyCourtCount, setPoints, startVT, hitsFlag, predictVT, pickTarget, assistAim, aimSpread
   };
 });

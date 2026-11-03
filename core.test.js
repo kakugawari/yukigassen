@@ -120,7 +120,8 @@ test('当たったら退場。味方の玉では退場しない', () => {
   foe.x = -4; foe.z = -1;
   foe.balls = 0; m.stock[1] = 0;
   mate.balls = 0; m.stock[0] = 0;   // 味方の AI が先に当ててしまわないように
-  // 味方の頭上を越えて、相手の足もとへ
+  // 味方の頭上を越えて、相手の足もとへ (構えきってから)
+  a.aimF = 1;
   const ball = C.throwBall(m, a, foe.x, foe.z);
   foe.ai.seen[ball.id] = true;      // 相手の AI がよけず、
   foe.ai.think = 99;                // 動きもしないように
@@ -248,6 +249,7 @@ test('狙いの補助: 走っている相手にも、壁の陰に立つ相手に
     const dir = k % 2 ? 1 : -1;
     q.vx = dir * R.SPEED; q.vz = 0;
     const aim = C.assistAim(m, me, null, q);
+    me.aimF = 1;
     C.throwBall(m, me, aim.x, aim.z);
     for (let i = 0; i < 120 && q.alive; i++) {
       q.x += dir * R.SPEED / 60; q.vx = dir * R.SPEED;   // まっすぐ走り続ける
@@ -265,9 +267,53 @@ test('狙いの補助: 走っている相手にも、壁の陰に立つ相手に
   const aim = C.assistAim(m, me, null, q);
   assert.ok(aim.clear, '当たるコースが見つかる');
   assert.ok(aim.z < q.z - 1, `相手より奥へ落とす (着地 z=${aim.z.toFixed(2)})`);
+  me.aimF = 1;
   C.throwBall(m, me, aim.x, aim.z);
   run(m, 1.2, { crouch: true });
   assert.ok(!q.alive, '頭越しに当たる');
+});
+
+test('構え: 押さえて定まってから離すと当たり、すぐ離す (連打) と外れる', () => {
+  // 立って止まっている相手へ 12m。押さえる長さだけを変えて 40 球ずつ
+  function shoot(holdFrames, seed) {
+    const m = playing({ human: 1, seed });
+    isolate(m, [1, 7]);
+    const me = m.players[1], q = m.players[7];
+    me.x = 1; me.z = 6; me.balls = 1; me.cd = 0;
+    q.x = 1; q.z = -6; q.vx = q.vz = 0; q.standT = 99;
+    q.ai.think = 999; q.ai.seen = new Proxy({}, { get: () => true });
+    for (let i = 0; i < holdFrames; i++) C.step(m, 1 / 60, { aiming: true });
+    const aim = C.assistAim(m, me, null, q);
+    C.step(m, 1 / 60, { throwAt: { x: aim.x, z: aim.z } });
+    for (let i = 0; i < 90 && q.alive; i++) C.step(m, 1 / 60, { crouch: true });
+    return !q.alive;
+  }
+  let tap = 0, held = 0;
+  for (let k = 0; k < 40; k++) { if (shoot(1, 100 + k)) tap++; if (shoot(Math.ceil(R.AIM_STEADY * 60) + 2, 100 + k)) held++; }
+  assert.ok(held >= 38, `構えきって離す: ${held}/40`);
+  assert.ok(tap <= 10, `すぐ離す: ${tap}/40`);
+});
+
+test('構え: 押さえている間だけ定まり、立つ。離すと 0 に戻る', () => {
+  const m = playing({ human: 1 });
+  isolate(m, [1, 7]);
+  const me = m.players[1];
+  me.x = 1; me.z = 6; me.balls = 2;
+  run(m, 0.5, { crouch: true });
+  assert.equal(me.aimF, 0, '押さえていなければ 0');
+  assert.ok(me.crouch, 'しゃがんでいる');
+  run(m, R.AIM_STEADY / 2, { crouch: true, aiming: true });
+  assert.ok(me.aimF > 0.4 && me.aimF < 0.6, `半分 (${me.aimF.toFixed(2)})`);
+  assert.ok(!me.crouch && C.playerHeight(me) === R.STAND_H, '構えている間は立つ');
+  run(m, R.AIM_STEADY, { crouch: true, aiming: true, mx: 1 });
+  assert.ok(me.aimF < 1, '走りながらは定まるのが遅い');
+  run(m, 0.1, { crouch: true });
+  assert.equal(me.aimF, 0, '離すと 0 に戻る');
+  // 構えきって投げると、狙ったところにそのまま落ちる
+  me.aimF = 1;
+  assert.equal(C.aimSpread(me, me.x, me.z - 12), 0);
+  me.aimF = 0;
+  assert.ok(C.aimSpread(me, me.x, me.z - 12) > 1.2, 'すぐ離すと 1m 以上ぶれる');
 });
 
 test('フラッグはバックスが抜いてもよい', () => {

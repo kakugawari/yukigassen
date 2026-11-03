@@ -7,7 +7,7 @@
   const C = window.Core;
   const R = C.R;
   const T = window.THREE;
-  const VERSION = 'v6';
+  const VERSION = 'v7';
   const AUTO_CROUCH = 0.2;   // 止まってからしゃがむまで (秒)
   // カメラ: 自分の (h) 上・(back) 後ろから、(ahead) 先の地面を見る
   // ahead は 5 → 7: 5 だとスタート地点から相手のシェルター・バックラインが上の帯の下に隠れ、
@@ -490,16 +490,20 @@
     const p = me();
     const aim = currentAim();
     app.lock = aim;
-    const ready = !!(aim && aim.clear && p && p.balls > 0);
+    const steady = !!(p && app.aim && (p.aimF >= 1 || app.match.phase === 'vt'));
+    const ready = !!(aim && aim.clear && p && p.balls > 0 && steady);
+    if (ready && !app.hud.ready && app.aim && app.match.phase === 'play') sound.steady();
     if (app.hud.ready !== ready) { app.hud.ready = ready; els.throwPad.classList.toggle('ready', ready); }
     // 狙っている相手の足もとに輪 (当たるコースなら赤、壁に隠れていれば灰色)
     if (aim && aim.target != null) {
       const q = app.match.players[aim.target];
       lockRing.visible = true;
       lockRing.position.set(q.x, 0.03, q.z);
-      const col = aim.clear ? 0xff3b30 : 0x8d99ab;
+      // 構えるほど輪が締まる。締まりきって当たるコースなら赤、まだなら橙、壁に隠れていれば灰色
+      const f = p ? p.aimF : 0;
+      const col = !aim.clear ? 0x8d99ab : ready ? 0xff3b30 : 0xffa21f;
       lockRing.material.color.setHex(col);
-      const s = 1 + Math.sin(performance.now() / 120) * 0.08;
+      const s = (ready ? 1 + Math.sin(performance.now() / 120) * 0.08 : 1) * (1 + 1.5 * (1 - f));
       lockRing.scale.set(s, s, 1);
       lockMark.visible = true;
       lockMark.material.color.setHex(col);
@@ -567,7 +571,7 @@
     els.stickZone.addEventListener('pointerup', endStick);
     els.stickZone.addEventListener('pointercancel', endStick);
 
-    // 投げる: タップで自動の狙い、はじくとその向きの相手、離すと投げる
+    // 投げる: 押さえて構え (輪が締まる)、離すと投げる。タップは前方の相手、はじくとその向きの相手
     els.throwPad.addEventListener('pointerdown', (e) => {
       if (app.aim) return;
       e.preventDefault();
@@ -663,6 +667,7 @@
     return {
       unlock,
       throw() { burst(0.16, 1400, 0.8, 0.25, 'bandpass'); },
+      steady() { tone(1320, 0.07, 0.12, 'triangle'); },
       splat(near) { burst(0.12, 500, 0.7, near ? 0.5 : 0.22, 'lowpass'); },
       hit(combo) {
         burst(0.2, 700, 0.6, 0.6, 'lowpass');
@@ -1122,7 +1127,10 @@
     const empty = balls === 0;
     if (app.hud.empty !== empty) { app.hud.empty = empty; els.throwPad.classList.toggle('empty', empty); }
     // 丸めている進み具合 (12段階に丸める。細かく書き換えると遅い端末でカクつく)
-    const prog = p && p.makeT > 0 ? Math.round(p.makeT / R.MAKE_TIME * 12) / 12 : 0;
+    const aiming = !!(p && app.aim && app.match.phase === 'play');
+    if (app.hud.aiming !== aiming) { app.hud.aiming = aiming; els.throwPad.classList.toggle('aiming', aiming); }
+    const prog = aiming ? Math.round(p.aimF * 12) / 12
+      : p && p.makeT > 0 ? Math.round(p.makeT / R.MAKE_TIME * 12) / 12 : 0;
     if (app.hud.prog !== prog) { app.hud.prog = prog; els.makeRing.style.setProperty('--p', prog); }
   }
   function aliveDots(n) {
@@ -1154,6 +1162,7 @@
       while (app.acc >= h && n < 4) {
         const inp = {
           mx: app.input.mx, mz: app.input.mz, crouch: app.input.crouch,
+          aiming: !!app.aim && app.match.phase === 'play',   // 投げるを押さえている間は構える (立つ)
           throwAt: app.input.throwAt
         };
         app.input.throwAt = null;

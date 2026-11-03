@@ -234,6 +234,26 @@ async function run() {
     const lockB = await flick(0, 80);
     ok(lockB && lockB.manual && lockB.target == null && lockB.z > 6, `だれもいない向きへはじくと、その向きの地面を狙う (z ${lockB && lockB.z.toFixed(1)})`);
 
+    // ---- 構え: 押さえている間に輪が締まり、締まりきると赤。離すと投げて 0 に戻る
+    await phone.waitForTimeout(600);
+    await phone.evaluate(() => { const me = window.__app.me(); me.balls = 5; me.cd = 0; window.__app.match().balls = []; });
+    await phone.mouse.move(pad.x, pad.y);
+    await phone.mouse.down();
+    await phone.waitForTimeout(150);
+    const h1 = await phone.evaluate(() => ({ f: window.__app.me().aimF, crouch: window.__app.me().crouch,
+      aiming: document.getElementById('throwPad').classList.contains('aiming'), ready: document.getElementById('throwPad').classList.contains('ready') }));
+    await phone.waitForFunction(() => window.__app.me().aimF >= 1, null, { timeout: 3000 });
+    await phone.waitForTimeout(100);
+    const h2 = await phone.evaluate(() => ({ f: window.__app.me().aimF, crouch: window.__app.me().crouch,
+      ready: document.getElementById('throwPad').classList.contains('ready') }));
+    await phone.mouse.up();
+    await phone.waitForTimeout(60);
+    const h3 = await phone.evaluate(() => { const m = window.__app.match(); const n = m.balls.filter((b) => b.owner === m.human).length; m.balls = []; return { n, f: window.__app.me().aimF }; });
+    ok(h1.aiming && h1.f > 0.05 && h1.f < 0.8 && !h1.ready, `押さえ始めは構えの途中で、まだ赤くない (${h1.f.toFixed(2)})`);
+    ok(h2.f === 1 && h2.ready, '押さえ続けると構えが定まり、投げるボタンが赤くなる');
+    ok(h1.crouch === false && h2.crouch === false, '構えている間は立つ');
+    ok(h3.n === 1 && h3.f === 0, `離すと 1 個投げ、構えは 0 に戻る (投げた ${h3.n})`);
+
     // ---- 隠れている物の印: 狙っている相手が帯の下・画面の外なら、帯の下端に矢印。見えていれば出さない
     const marks = await phone.evaluate(async (ids) => {
       const A = window.__app, m = A.match(), me = A.me();
@@ -273,7 +293,7 @@ async function run() {
       `届くいちばん遠い相手 (22m) も帯の下に見える (相手 y${marks.far.y} / 帯 y${marks.far.bar})`);
     ok(marks.flagFar && !marks.flagNear, `相手のフラッグは、隠れているときだけ印を出す (遠く ${marks.flagFar} / そば ${marks.flagNear})`);
 
-    // ---- 当てたときの手応え: 目の前で止まっている相手にタップで当てる
+    // ---- 当てたときの手応え: 目の前で止まっている相手に、構えてから当てる
     // (上ではじいた玉が当たってセットが終わっていることがあるので、プレー中に戻るのを待つ)
     await phone.waitForFunction(() => window.__app.match().phase === 'play', null, { timeout: 15000 });
     const victim = await phone.evaluate(() => {
@@ -291,7 +311,10 @@ async function run() {
       return reds[0].id;
     });
     await phone.waitForTimeout(100);
-    await phone.mouse.click(pad.x, pad.y);
+    await phone.mouse.move(pad.x, pad.y);
+    await phone.mouse.down();
+    await phone.waitForFunction(() => window.__app.me().aimF >= 1, null, { timeout: 3000 });
+    await phone.mouse.up();
     await phone.waitForFunction((id) => !window.__app.match().players[id].alive, victim, { timeout: 5000 }).catch(() => {});
     await phone.waitForTimeout(50);
     const juice = await phone.evaluate((id) => ({
@@ -300,7 +323,7 @@ async function run() {
       combo: window.__app.app.combo.n
     }), victim);
     // (直前のはじく確かめで当たっていれば、連続ヒットの言葉になる)
-    ok(juice.out && juice.pop.some((t) => /OUT!|ダブル!|トリプル!|連続!/.test(t)), `タップで当てると文字が浮かぶ (${juice.pop.join(',')})`);
+    ok(juice.out && juice.pop.some((t) => /OUT!|ダブル!|トリプル!|連続!/.test(t)), `構えて当てると文字が浮かぶ (${juice.pop.join(',')})`);
 
     // ---- 止まるとしゃがんで丸める
     await phone.evaluate(() => { const m = window.__app.match(); m.stock[0] = 30; window.__app.me().balls = 1; });

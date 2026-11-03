@@ -7,8 +7,12 @@
   const C = window.Core;
   const R = C.R;
   const T = window.THREE;
-  const VERSION = 'v5';
+  const VERSION = 'v6';
   const AUTO_CROUCH = 0.2;   // 止まってからしゃがむまで (秒)
+  // カメラ: 自分の (h) 上・(back) 後ろから、(ahead) 先の地面を見る
+  // ahead は 5 → 7: 5 だとスタート地点から相手のシェルター・バックラインが上の帯の下に隠れ、
+  // 狙っている相手が見えなかった (自分は画面の 68% → 75% の高さへ下がる)
+  const CAM = { h: 21, back: 10, ahead: 7, fov: 52 };
 
   const $ = (id) => document.getElementById(id);
   const els = {
@@ -18,6 +22,7 @@
     ptsBlue: $('ptsBlue'), ptsRed: $('ptsRed'), inEnemy: $('inEnemy'), warn: $('warn'),
     stickZone: $('stickZone'), stick: $('stick'), knob: $('knob'), moveHint: $('moveHint'),
     makeRing: $('makeRing'), throwPad: $('throwPad'), myBalls: $('myBalls'), pops: $('pops'),
+    markLock: $('markLock'), markFlag: $('markFlag'), markFlagText: $('markFlagText'), score: document.querySelector('.score'),
     banner: $('banner'),
     vTitle: $('vTitle'), vPause: $('vPause'), vResult: $('vResult'),
     btnStart: $('btnStart'), btnPause: $('btnPause'), btnResume: $('btnResume'), btnQuit: $('btnQuit'),
@@ -59,7 +64,7 @@
   renderer.setClearColor(0xcfe3f5);
   const scene = new T.Scene();
   scene.fog = new T.Fog(0xcfe3f5, 30, 70);
-  const camera = new T.PerspectiveCamera(52, 1, 0.5, 120);
+  const camera = new T.PerspectiveCamera(CAM.fov, 1, 0.5, 120);
   const camPos = new T.Vector3(0, 16, 30);
   const camLook = new T.Vector3(0, 0, 10);
 
@@ -288,7 +293,7 @@
   // 寝かせると (ふつうのスプライト) 板が後ろの壁にめりこみ、壁の手前にいる選手の頭が欠ける。
   // 縦の板は見下ろすと縮んで見えるので、そのぶん縦に伸ばしておく。
   const SPR = { cols: 8, rows: 6, cell: 192, base: 184, figure: 150 };
-  const CAM_PITCH = Math.atan2(21, 15);            // camTarget の見下ろす角度 (約 55°)
+  const CAM_PITCH = Math.atan2(CAM.h, CAM.back + CAM.ahead);   // camTarget の見下ろす角度
   const SPR_W = 2.1;                               // 1 コマの横幅 (m)。立った姿が 1.65m ほどに見える (1.6 では小さいと言われた)
   const SPR_H = SPR_W / Math.cos(CAM_PITCH);       // 縦に立てた板の高さ
   const sprGeo = new T.PlaneGeometry(SPR_W, SPR_H);
@@ -862,7 +867,7 @@
     // あかの選手を追うとき (ビクトリースローのあかの番) は、反対側から見る
     const f = p && p.team === 1 && app.match && app.match.phase === 'vt' ? -1 : 1;
     const z = p ? (f > 0 ? clampN(p.z, -16, 17) : clampN(p.z, -17, 16)) : 12;
-    return { pos: new T.Vector3(x, 21, z + 10 * f), look: new T.Vector3(x, 0, z - 5 * f) };
+    return { pos: new T.Vector3(x, CAM.h, z + CAM.back * f), look: new T.Vector3(x, 0, z - CAM.ahead * f) };
   }
   function clampN(v, a, b) { return v < a ? a : v > b ? b : v; }
 
@@ -1033,6 +1038,44 @@
     return s;
   }
 
+  /**
+   * 画面の外や上の帯の下にある物を、帯のすぐ下の端に矢印で出す (狙っている相手・相手のフラッグ)。
+   * 見えているときは出さない
+   */
+  function edgeMark(el, key, wx, wy, wz, label) {
+    let show = false, x = 0;
+    if (wx != null) {
+      const v = new T.Vector3(wx, wy, wz).project(camera);
+      const r = els.canvas.getBoundingClientRect();
+      const sx = r.left + (v.x + 1) / 2 * r.width, sy = r.top + (1 - v.y) / 2 * r.height;
+      const top = app.hudBottom || 0;
+      show = v.z > 1 || sy < top + 6 || sx < 0 || sx > r.width;
+      x = Math.max(36, Math.min(r.width - 36, sx));
+    }
+    const st = app.hud[key] || {};
+    if (st.show !== show) { el.hidden = !show; st.show = show; }
+    if (show) {
+      // 帯の下端にまたがせて置く (コートの奥、相手のバックスがいる所をなるべく隠さない)
+      const tx = Math.round(x), ty = Math.round((app.hudBottom || 0) - 7);
+      if (st.x !== tx || st.y !== ty) { el.style.transform = `translate(${tx}px, ${ty}px) translate(-50%, 0)`; st.x = tx; st.y = ty; }
+      if (label != null && st.label !== label) { el.lastChild.textContent = label; st.label = label; }
+    }
+    app.hud[key] = st;
+  }
+
+  function updateEdgeMarks() {
+    const m = app.match, p = me();
+    const playing = m && app.running && m.phase === 'play' && p && p.alive;
+    if (playing && app.lock && app.lock.target != null) {
+      const q = m.players[app.lock.target];
+      edgeMark(els.markLock, 'mkLock', q.x, 1.0, q.z, `狙い ${Math.round(Math.hypot(q.x - p.x, q.z - p.z))}m`);
+    } else edgeMark(els.markLock, 'mkLock', null);
+    if (playing) {
+      const f = C.flagPos(1 - p.team);
+      edgeMark(els.markFlag, 'mkFlag', f.x, 2.0, f.z, `フラッグ ${Math.round(Math.hypot(f.x - p.x, f.z - p.z))}m`);
+    } else edgeMark(els.markFlag, 'mkFlag', null);
+  }
+
   function updateHud() {
     const m = app.match;
     if (!m) return;
@@ -1126,12 +1169,14 @@
     }
     updateHud();
     render(app.paused ? 0 : dt);
+    updateEdgeMarks();
   }
 
   function resize() {
     const w = els.game.clientWidth, h = els.game.clientHeight;
     if (!(w >= 1 && h >= 1)) return;   // 回転中などに 0 が来ることがある
     renderer.setSize(w, h, false);
+    app.hudBottom = els.score.getBoundingClientRect().bottom;
     camera.aspect = w / h;
     camera.updateProjectionMatrix();
     els.ver.textContent = `${VERSION} 描ける${h} / 窓${window.innerHeight}`;
@@ -1214,8 +1259,10 @@
       },
       aimTarget,
       currentAim,
+      setCam: (o) => { Object.assign(CAM, o); camera.fov = CAM.fov; camera.updateProjectionMatrix(); snapCamera(); },
       pickFrame,
       sprites: () => ({ ready: !!sprites.tex, failed: sprites.failed }),
+      hudBottom: () => app.hudBottom,
       textures: () => ({ loaded: app.tex.loaded, failed: app.tex.failed, names: app.tex.names.slice() }),
       frameOf: (id) => { const v = views.players[id]; return v && v.spr ? Object.assign({ visible: v.spr.mesh.visible }, v.spr.frame) : null; },
       // 選手の絵の板が、画面でどんな形に見えているか (横の辺と縦の辺の長さ、px)

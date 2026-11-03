@@ -142,6 +142,21 @@ async function run() {
         `${r.sel} が安全域ぶんずれても画面内 (${Math.round(r.left)},${Math.round(r.top)})-(${Math.round(r.right)},${Math.round(r.bottom)})`);
     }
 
+    // ---- 見える範囲: スタート地点から、相手のシェルターとバックラインが上の帯に隠れない
+    // (帯は実機では安全域 59 だけ下へずれる。3D は画面いっぱいに描くので、そちらはずれない)
+    const view = await phone.evaluate(async () => {
+      const A = window.__app, C = window.Core, me = A.me();
+      me.x = -2; me.z = C.R.BACK_LINE_U - 0.5;
+      await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
+      await new Promise((r) => setTimeout(r, 400));   // カメラが追いつくのを待つ
+      const bar = A.hudBottom() + 59;
+      const y = (x, z, h) => A.project(x, h, z).y;
+      return { bar: Math.round(bar), shelter: Math.round(y(-2.6, -8, 1.2)), back: Math.round(y(0, -C.R.BACK_LINE_U, 0)), meY: Math.round(y(me.x, me.z, 0)) };
+    });
+    ok(view.shelter > view.bar && view.back > view.bar,
+      `スタート地点から相手のシェルター (y${view.shelter})・バックライン (y${view.back}) が帯 (下端 y${view.bar}) に隠れない`);
+    ok(view.meY > 932 * 0.7 && view.meY < 932 * 0.82, `自分は画面の下寄り (y${view.meY} = ${Math.round(view.meY / 9.32)}%)`);
+
     // ---- 移動
     const center = async (sel) => phone.evaluate((s) => {
       const r = document.querySelector(s).getBoundingClientRect();
@@ -218,6 +233,45 @@ async function run() {
     await phone.waitForTimeout(600);
     const lockB = await flick(0, 80);
     ok(lockB && lockB.manual && lockB.target == null && lockB.z > 6, `だれもいない向きへはじくと、その向きの地面を狙う (z ${lockB && lockB.z.toFixed(1)})`);
+
+    // ---- 隠れている物の印: 狙っている相手が帯の下・画面の外なら、帯の下端に矢印。見えていれば出さない
+    const marks = await phone.evaluate(async (ids) => {
+      const A = window.__app, m = A.match(), me = A.me();
+      const reds = m.players.filter((p) => p.team === 1 && p.alive);
+      const q = m.players[ids.left];
+      const wait = () => new Promise((r) => setTimeout(r, 250));
+      const shown = (id) => !document.getElementById(id).hidden;
+      // 実機の上の安全域 (59) を帯に足して測る (このブラウザでは 0 なので、帯が 59 だけ上にある)
+      const style = document.createElement('style');
+      style.textContent = '.hud { padding-top: 65px !important; }';
+      document.head.appendChild(style);
+      window.dispatchEvent(new Event('resize'));
+      // 見える所 (自分の少し前)
+      reds.forEach((p) => { if (p !== q) { p.x = 4.6; p.z = 30; p.alive = false; } });
+      me.x = 0; me.z = 8; q.x = 0; q.z = 2; q.ai.goal = null;
+      await wait();
+      const near = { lock: shown('markLock'), target: A.app.lock && A.app.lock.target };
+      // 画面の上の外 (相手のエンドラインのそば)
+      // 届くいちばん遠い所 (22m 先) の相手でも、帯の下に見えている (だから矢印は出ない)
+      me.x = 0; me.z = 10.5; q.x = 0; q.z = 10.5 - window.Core.R.RANGE;
+      await wait();
+      const bar = A.hudBottom();
+      const far = { lock: shown('markLock'), target: A.app.lock && A.app.lock.target, y: Math.round(A.project(q.x, 1.0, q.z).y), bar: Math.round(bar) };
+      // フラッグ: 遠くからは印、すぐそば (見えている) なら出さない
+      me.z = 10.5; await wait();
+      const flagFar = shown('markFlag');
+      me.x = 2; me.z = -9; await wait();
+      const flagNear = shown('markFlag');
+      me.x = 0; me.z = 8;
+      reds.forEach((p) => { p.alive = true; });
+      style.remove();
+      window.dispatchEvent(new Event('resize'));
+      return { near, far, flagFar, flagNear };
+    }, setup);
+    ok(marks.near.target === setup.left && !marks.near.lock, '狙っている相手が見えていれば、矢印は出さない');
+    ok(marks.far.target === setup.left && marks.far.y > marks.far.bar && !marks.far.lock,
+      `届くいちばん遠い相手 (22m) も帯の下に見える (相手 y${marks.far.y} / 帯 y${marks.far.bar})`);
+    ok(marks.flagFar && !marks.flagNear, `相手のフラッグは、隠れているときだけ印を出す (遠く ${marks.flagFar} / そば ${marks.flagNear})`);
 
     // ---- 当てたときの手応え: 目の前で止まっている相手にタップで当てる
     // (上ではじいた玉が当たってセットが終わっていることがあるので、プレー中に戻るのを待つ)
@@ -356,7 +410,12 @@ async function run() {
     await phone.mouse.up();
     const foul = await phone.evaluate(() => ({ r: window.__app.match().setResults.slice(-1)[0], ban: document.getElementById('banner').textContent }));
     ok(foul.r && foul.r.reason === 'over' && foul.r.winner === 1, `4 人目が入るとセット負け (${foul.ban})`);
-    await phone.waitForFunction(() => window.__app.match().phase === 'play', null, { timeout: 10000 });
+    // 前の確かめでセットが終わっていると、ここで試合が決まることがある。そのときは新しい試合で続ける
+    await phone.waitForFunction(() => window.__app.match().phase === 'play' || !document.getElementById('vResult').hidden, null, { timeout: 10000 });
+    if (await phone.evaluate(() => !document.getElementById('vResult').hidden)) {
+      await phone.click('#btnAgain');
+      await phone.waitForFunction(() => window.__app.match().phase === 'play', null, { timeout: 10000 });
+    }
 
     // ---- ビクトリースロー
     section('ビクトリースロー');
@@ -368,7 +427,7 @@ async function run() {
     });
     ok(vt0.phase === 'vt' && vt0.alive === 2 && vt0.me, `投げる 2 人だけが残り、自分が投げる (${vt0.ban})`);
     ok(vt0.time === 'VT', '時計の所が VT になる');
-    const vtHide = await phone.evaluate(() => ['.stock', '#stickZone'].map((q) => getComputedStyle(document.querySelector(q)).visibility));
+    const vtHide = await phone.evaluate(() => ['.stockline', '#inEnemy', '#stickZone'].map((q) => getComputedStyle(document.querySelector(q)).visibility));
     ok(vtHide.every((v) => v === 'hidden'), `VT では使わない表示と操作を隠す (${vtHide.join(',')})`);
     // フラッグに当たる着地点を、投げるボタンのスライドで狙う
     await phone.waitForFunction(() => window.__app.match().vt.wait <= 0, null, { timeout: 5000 });

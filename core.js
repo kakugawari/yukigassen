@@ -40,7 +40,7 @@
     SPEED: 4.3,           // 走る速さ
     STAND_AFTER_THROW: 0.45, // 投げたあと立っている時間 (この間は隠れていても当たる)
     THROW_CD: 0.5,
-    MAKE_TIME: 0.9,       // 1 個丸める時間
+    MAKE_TIME: 0.6,       // 1 個丸める時間 (0.9 秒では、生きている時間の 6 割が雪玉 0 個だった)
     MAX_CARRY: 5,
     START_CARRY: 3,
     BALLS_PER_SET: 90,    // 公式: 1 セット 90 球

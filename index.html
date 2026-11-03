@@ -17,23 +17,23 @@
 
   <!-- 上の表示 -->
   <div class="hud" id="hud">
+    <!-- 1 段の細い帯 (コートの奥を隠さないように) -->
     <div class="score">
       <div class="team blue">
-        <span class="tname">あお <span class="pts" id="ptsBlue">0pt</span></span>
-        <span class="sets" id="setsBlue"></span>
+        <span class="row1"><b class="tname">あお</b><span class="pts" id="ptsBlue">0pt</span><span class="sets" id="setsBlue"></span></span>
         <span class="alive" id="aliveBlue"></span>
+        <span class="stockline" id="stockBlue">雪玉 69</span>
       </div>
       <div class="clock">
-        <span class="setno" id="setNo">SET 1</span>
         <span class="time" id="time">1:30</span>
+        <span class="sub"><span class="setno" id="setNo">SET 1</span><span class="in-enemy" id="inEnemy">敵陣 0/3</span></span>
       </div>
       <div class="team red">
-        <span class="tname"><span class="pts" id="ptsRed">0pt</span> あか</span>
-        <span class="sets" id="setsRed"></span>
+        <span class="row1"><span class="sets" id="setsRed"></span><span class="pts" id="ptsRed">0pt</span><b class="tname">あか</b></span>
         <span class="alive" id="aliveRed"></span>
+        <span class="stockline" id="stockRed">雪玉 69</span>
       </div>
     </div>
-    <div class="stock"><span id="stockBlue">雪玉 69</span><span class="in-enemy" id="inEnemy">敵陣 0/3</span><span id="stockRed">雪玉 69</span></div>
     <button type="button" class="pause" id="btnPause" aria-label="一時停止">Ⅱ</button>
   </div>
 
@@ -51,6 +51,9 @@
   </div>
 
   <div class="pops" id="pops"></div>
+  <!-- 画面の外や上の帯の下にいる物の向き: 狙っている相手・相手のフラッグ -->
+  <div class="edge-mark lock" id="markLock" hidden><i></i><span>狙い</span></div>
+  <div class="edge-mark flag" id="markFlag" hidden><i></i><span id="markFlagText">フラッグ</span></div>
   <div class="banner" id="banner" hidden></div>
   <div class="warn" id="warn" hidden>敵陣はもう3人。<b>入ると反則負け</b></div>
 

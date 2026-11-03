@@ -353,6 +353,27 @@ async function run() {
     ok(juice.center && Math.abs(juice.center.x - 215) < 30 && juice.center.y > 300 && juice.center.y < 560 && juice.center.w > 200, `HIT!! は画面の真ん中に大きく出る (${juice.center && Math.round(juice.center.x)}, ${juice.center && Math.round(juice.center.y)} / 幅 ${juice.center && Math.round(juice.center.w)})`);
     ok(juice.shake > 0 && hitGone.shake === 0, `当てた瞬間だけ画面が揺れ、すぐ収まる (${juice.shake.toFixed(2)} → ${hitGone.shake})`);
     ok(hitGone.left === 0, 'HIT!! は消える (残らない)');
+    // セットの決着も真ん中に大きく。縁は勝ったチームの色。HIT!! が出ている間は、それが消えてから出す
+    const setRes = await phone.evaluate(async () => {
+      const A = window.__app, m = A.match();
+      const q = m.players.find((p) => p.team === 1 && p.alive);
+      m.events.push({ type: 'hit', player: q.id, by: m.human, x: q.x, y: 1, z: q.z, vx: 0, vz: -1 });
+      m.events.push({ type: 'setEnd', reason: 'flag', winner: 0, setNo: 1, points: [10, 5] });
+      const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+      await wait(150);
+      const during = { hit: !!document.querySelector('#pops .hit-text'), result: !!document.querySelector('#pops .result-text') };
+      await wait(700);
+      const e = document.querySelector('#pops .result-text');
+      const r = e && e.getBoundingClientRect();
+      const out = { during, lines: e ? [...e.querySelectorAll('b')].map((b) => b.textContent) : [], blue: !!e && e.classList.contains('blue'),
+        inside: !!r && r.left >= 0 && r.right <= 430, banner: document.getElementById('banner').hidden };
+      document.querySelectorAll('#pops .big-text').forEach((x) => x.remove());
+      q.alive = true;
+      return out;
+    });
+    ok(setRes.during.hit && !setRes.during.result, 'HIT!! と決着が重なるときは、HIT!! が先 (決着の字はまだ出ない)');
+    ok(setRes.lines[0] === 'フラッグ奪取!' && setRes.lines[1] === 'あおの勝ち!' && setRes.blue && setRes.inside && setRes.banner,
+      `セットの決着は真ん中に大きく、勝ったチームの色の縁で、画面に収まる (${setRes.lines.join(' / ')})`);
     ok(bashi && bashi.peak > 0.2 && bashi.peak < 0.9, `「バシッ!」の大きさ: いちばん大きい所 ${bashi && bashi.peak.toFixed(2)} (0.2〜0.9) / 平均 ${bashi && bashi.rms.toFixed(3)}`);
 
     // ---- 止まるとしゃがんで丸める
@@ -514,6 +535,9 @@ async function run() {
     const vtRes = await phone.evaluate(() => ({ hidden: document.getElementById('vResult').hidden, text: document.getElementById('resultSets').textContent, by: window.__app.match().decidedBy }));
     ok(!vtRes.hidden && vtRes.by === 'vt' && vtRes.text.includes('ビクトリースロー'), `ビクトリースローで決着し、結果に出る (${vtRes.text.slice(-40)})`);
     await phone.click('#btnAgain');
+    await phone.waitForTimeout(200);
+    const startBan = await phone.evaluate(() => { const b = document.getElementById('banner'); const r = b.getBoundingClientRect(); return { hidden: b.hidden, text: b.textContent, w: r.width, h: r.height }; });
+    ok(!startBan.hidden && startBan.w > startBan.h * 1.5, `始まりの帯 (${startBan.text}) が縦に潰れない (${Math.round(startBan.w)}x${Math.round(startBan.h)})`);
     await phone.waitForFunction(() => window.__app.match().phase === 'play', null, { timeout: 10000 });
     const back = await phone.evaluate(() => getComputedStyle(document.querySelector('#stickZone')).visibility);
     ok(back === 'visible', '次の試合では操作が戻る');
@@ -528,13 +552,14 @@ async function run() {
     });
     await phone.waitForFunction(() => window.__app.match().phase === 'setOver', null, { timeout: 5000 });
     await phone.waitForTimeout(60);
+    await phone.waitForFunction(() => document.querySelector('#pops .result-text'), null, { timeout: 3000 }).catch(() => {});
     const ban = await phone.evaluate(() => {
-      const b = document.getElementById('banner');
-      const r = b.getBoundingClientRect();
-      return { hidden: b.hidden, text: b.textContent, w: r.width, h: r.height };
+      const b = document.querySelector('#pops .result-text');
+      const r = b ? b.getBoundingClientRect() : { width: 0, height: 0 };
+      return { shown: !!b, text: b ? [...b.querySelectorAll('b')].map((x) => x.textContent).join(' / ') : '', w: r.width, h: r.height };
     });
-    ok(!ban.hidden && ban.text.includes('全員アウト') && ban.text.includes('10 - 0 pt'), `セットの結果とポイントが出る (${ban.text})`);
-    ok(ban.w > ban.h * 1.5, `帯が縦に潰れない (${Math.round(ban.w)}x${Math.round(ban.h)})`);
+    ok(ban.shown && ban.text.includes('全員アウト') && ban.text.includes('あおの勝ち') && ban.text.includes('10 - 0 pt'), `セットの結果とポイントが真ん中に大きく出る (${ban.text})`);
+    ok(ban.w > 250 && ban.w <= 430, `決着の字が画面の幅に収まる (${Math.round(ban.w)}x${Math.round(ban.h)})`);
     await phone.waitForFunction(() => !document.getElementById('vResult').hidden, null, { timeout: 10000 });
     const res = await phone.evaluate(() => ({ t: document.getElementById('resultTitle').textContent, n: document.querySelectorAll('#resultSets li').length }));
     ok(res.t.includes('勝利'), `2 セット取ると試合終了の画面 (${res.t}, ${res.n} 行)`);

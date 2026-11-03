@@ -324,32 +324,39 @@ body:has(#vTitle:not([hidden])) .controls { visibility: hidden; }
   letter-spacing: .02em;
 }
 .pop.big { font-size: 40px; -webkit-text-stroke-color: #ff8a00; }
-/* 自分が当てたときの「HIT!!」: 画面の真ん中。斜めの太字、白い字に赤い縁、その外に黒い縁 */
-.hit-text {
+/* 画面の真ん中の大きな字 (HIT!!・フラッグ奪取!・あおの勝ち! など): 斜めの太字、白い字にチーム色の縁、その外に黒い縁 */
+.big-text {
+  --c: #e0201a;
   position: absolute; left: 50%; top: 46%;
   display: flex; flex-direction: column; align-items: center;
   pointer-events: none; white-space: nowrap;
   font-family: "Arial Black", "Hiragino Sans", "Hiragino Kaku Gothic ProN", sans-serif;
   font-weight: 900; font-style: italic;
 }
-.hit-text b, .hit-text small { position: relative; display: block; line-height: 1; isolation: isolate; }
-.hit-text b { font-size: 84px; letter-spacing: .02em; }
-.hit-text small { font-size: 30px; margin-top: 4px; }
-/* 字の本体 (白 + 赤い縁) を上に、同じ字を黒い太い縁で下に敷く (縁は字の下に塗る: paint-order) */
-.hit-text b, .hit-text small {
+.big-text.blue { --c: #2f6fe0; }
+.big-text.gray { --c: #6b778a; }
+.big-text.result-text { top: 40%; }
+.big-text b {
+  position: relative; display: block; line-height: 1.05; isolation: isolate;
   color: #fff;
-  -webkit-text-stroke: 9px #e0201a;
+  -webkit-text-stroke: 9px var(--c);
   paint-order: stroke fill;
 }
-.hit-text small { -webkit-text-stroke-width: 6px; }
-.hit-text b::before, .hit-text small::before {
+/* 同じ字を黒い太い縁で下に敷く (縁は字の下に塗る: paint-order) */
+.big-text b::before {
   content: attr(data-t);
   position: absolute; left: 0; top: 0; z-index: -1;
   color: #111;
   -webkit-text-stroke: 19px #111;
   paint-order: stroke fill;
 }
-.hit-text small::before { -webkit-text-stroke-width: 13px; }
+.big-text .l1 { font-size: 84px; letter-spacing: .02em; }
+.big-text.result-text .l1 { font-size: 58px; }
+.big-text .l2 { font-size: 46px; margin-top: 6px; }
+.big-text .sub { font-size: 30px; margin-top: 4px; -webkit-text-stroke-width: 6px; }
+.big-text .sub::before { -webkit-text-stroke-width: 13px; }
+.big-text .info { font-size: 18px; margin-top: 10px; -webkit-text-stroke-width: 4px; font-style: normal; }
+.big-text .info::before { -webkit-text-stroke-width: 9px; }
 
 /* 画面の外・上の帯の下にいる物の向き (狙っている相手・相手のフラッグ) */
 .edge-mark {

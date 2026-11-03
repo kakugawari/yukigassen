@@ -7,7 +7,7 @@
   const C = window.Core;
   const R = C.R;
   const T = window.THREE;
-  const VERSION = 'v12';
+  const VERSION = 'v13';
   const AI_SKILL = 0.5;      // 相手の強さ (前の「ふつう」)。強さのえらびはやめ、投げ方をえらぶ
   const AUTO_CROUCH = 0.2;   // 止まってからしゃがむまで (秒)
   // カメラ: 自分の (h) 上・(back) 後ろから、(ahead) 先の地面を見る
@@ -860,17 +860,33 @@
    */
   const HIT_SHAKE = { time: 0.2, amp: 0.22 };   // 揺れ: 0.2 秒、はじめ 0.22m (画面で 8px ほど) から 0 へ
   function hitText(sub) {
+    app.hitTextUntil = performance.now() + 500;
+    return bigText([{ t: 'HIT!!', cls: 'l1' }, sub && { t: sub, cls: 'sub' }], 'red', 500, 'hit-text');
+  }
+
+  /**
+   * 画面の真ん中に大きな字 (HIT!! と同じ作り: 斜めの太字、白い字にチーム色の縁・その外に黒い縁)。
+   * lines: [{ t: 字, cls: 'l1' | 'l2' | 'sub' | 'info' }]。color: 'red' | 'blue' | 'gray'。
+   * 飛び出して、持ちこたえ、少し縮みながら消える。HIT!! が出ている間は、それが消えてから出す
+   */
+  function bigText(lines, color, dur, extra) {
     const el = document.createElement('div');
-    el.className = 'hit-text';
-    el.innerHTML = '<b data-t="HIT!!">HIT!!</b>' + (sub ? `<small data-t="${sub}">${sub}</small>` : '');
-    els.pops.appendChild(el);
-    const a = el.animate([
-      { transform: 'translate(-50%, -50%) rotate(-8deg) skewX(-12deg) scale(1.9)', opacity: 0 },
-      { transform: 'translate(-50%, -50%) rotate(-8deg) skewX(-12deg) scale(1)', opacity: 1, offset: 0.16 },
-      { transform: 'translate(-50%, -50%) rotate(-8deg) skewX(-12deg) scale(1.04)', opacity: 1, offset: 0.55 },
-      { transform: 'translate(-50%, -50%) rotate(-8deg) skewX(-12deg) scale(.72)', opacity: 0 }
-    ], { duration: 500, easing: 'ease-out' });
-    a.onfinish = () => el.remove();
+    el.className = 'big-text ' + (color || 'red') + (extra ? ' ' + extra : '');
+    const esc = (t) => String(t).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]);
+    el.innerHTML = lines.filter(Boolean).map((l) => `<b class="${l.cls}" data-t="${esc(l.t)}">${esc(l.t)}</b>`).join('');
+    const hold = dur <= 600 ? 0.55 : 0.85;
+    const run = () => {
+      els.pops.appendChild(el);
+      const a = el.animate([
+        { transform: 'translate(-50%, -50%) rotate(-8deg) skewX(-12deg) scale(1.9)', opacity: 0 },
+        { transform: 'translate(-50%, -50%) rotate(-8deg) skewX(-12deg) scale(1)', opacity: 1, offset: Math.min(0.16, 80 / dur) },
+        { transform: 'translate(-50%, -50%) rotate(-8deg) skewX(-12deg) scale(1.04)', opacity: 1, offset: hold },
+        { transform: 'translate(-50%, -50%) rotate(-8deg) skewX(-12deg) scale(.72)', opacity: 0 }
+      ], { duration: dur, easing: 'ease-out' });
+      a.onfinish = () => el.remove();
+    };
+    const wait = extra === 'hit-text' ? 0 : Math.max(0, (app.hitTextUntil || 0) - performance.now());
+    if (wait > 0) setTimeout(run, wait); else run();
     return el;
   }
 
@@ -900,6 +916,7 @@
   }
 
   const REASON = { flag: 'フラッグ奪取!', allout: '全員アウト', time: '時間切れ', over: '敵陣に4人目 (反則)' };
+  const BIG_REASON = { flag: 'フラッグ奪取!', allout: '全員アウト!', time: '時間切れ', over: '4人目で反則!' };
   const DECIDED = { sets: 'セット数', points: 'ポイント合計', vt: 'ビクトリースロー' };
 
   function handleEvents() {
@@ -963,8 +980,11 @@
         case 'handOver': break;
         case 'setEnd': {
           sound.whistle(true);
-          const who = e.winner === 0 ? 'あおの勝ち' : e.winner === 1 ? 'あかの勝ち' : '引き分け';
-          showBanner(`${REASON[e.reason]}<small>SET ${e.setNo} ${who} ・ ${e.points[0]} - ${e.points[1]} pt</small>`, e.winner === 0 ? 'blue' : e.winner === 1 ? 'red' : '', R.SET_OVER);
+          const who = e.winner === 0 ? 'あおの勝ち!' : e.winner === 1 ? 'あかの勝ち!' : '引き分け';
+          // 決め手と勝ったチームを真ん中に大きく (縁は勝ったチームの色)。下に小さく点数
+          els.banner.hidden = true;
+          bigText([{ t: BIG_REASON[e.reason], cls: 'l1' }, { t: who, cls: 'l2' }, { t: `SET ${e.setNo} ・ ${e.points[0]} - ${e.points[1]} pt`, cls: 'info' }],
+            e.winner === 0 ? 'blue' : e.winner === 1 ? 'red' : 'gray', (R.SET_OVER - 0.3) * 1000, 'result-text');
           app.aim = null; els.throwPad.classList.remove('on');
           break;
         }
@@ -991,7 +1011,9 @@
           break;
         case 'vtEnd':
           sound.whistle(true);
-          showBanner(`${e.winner === 0 ? 'あお' : 'あか'}の勝ち<small>ビクトリースロー ${vtTally()}</small>`, e.winner === 0 ? 'blue' : 'red', R.SET_OVER);
+          els.banner.hidden = true;
+          bigText([{ t: e.winner === 0 ? 'あおの勝ち!' : 'あかの勝ち!', cls: 'l1' }, { t: `ビクトリースロー ${vtTally()}`, cls: 'info' }],
+            e.winner === 0 ? 'blue' : 'red', (R.SET_OVER - 0.3) * 1000, 'result-text');
           break;
       }
     }

@@ -116,6 +116,21 @@ async function run() {
     }));
     ok(fit.wide <= 1, '横スクロールが出ない');
     ok(fit.title.includes('雪合戦'), `タイトルが出ている (${fit.title})`);
+    // タイトルの見た目: 題字が画面の幅に収まる・雪が降る・後ろのカメラがコートのまわりを回る
+    const look = await phone.evaluate(async () => {
+      const img = document.querySelector('h1.logo-img img');
+      await img.decode().catch(() => {});
+      await new Promise((res) => setTimeout(res, 800));      // 飛び出す動きが終わるまで
+      const r = img.getBoundingClientRect();
+      const p0 = window.__app.camInfo().pos;
+      await new Promise((res) => setTimeout(res, 1500));
+      const p1 = window.__app.camInfo().pos;
+      return { l: Math.round(r.left), r: Math.round(r.right), w: img.naturalWidth, src: img.currentSrc.slice(-10), snow: document.querySelectorAll('#vTitle .snow i').length, moved: Math.hypot(p1[0] - p0[0], p1[2] - p0[2]), doc: document.title };
+    });
+    ok(look.w > 0 && look.l >= -10 && look.r <= 440 && look.r - look.l > 360, `ロゴの絵が読めて、画面の幅いっぱいに収まる (${look.l}〜${look.r}・元の幅 ${look.w}px)`);
+    ok(look.doc === 'スノーバトル', `アプリの名前がスノーバトル (${look.doc})`);
+    ok(look.snow >= 20, `タイトルに雪が降る (${look.snow} 粒)`);
+    ok(look.moved > 0.2, `タイトルの後ろでカメラがコートのまわりを回る (1.5 秒で ${look.moved.toFixed(2)}m)`);
     // ホーム画面のアイコン: iOS は SVG を使えないので PNG (180x180)。読めて、大きさが合っている
     const icon = await phone.evaluate(async () => {
       const l = document.querySelector('link[rel="apple-touch-icon"]');
@@ -169,7 +184,7 @@ async function run() {
     });
     ok(view.shelter > view.bar && view.back > view.bar,
       `スタート地点から相手のシェルター (y${view.shelter})・バックライン (y${view.back}) が帯 (下端 y${view.bar}) に隠れない`);
-    ok(view.meY > 932 * 0.7 && view.meY < 932 * 0.82, `自分は画面の下寄り (y${view.meY} = ${Math.round(view.meY / 9.32)}%)`);
+    ok(view.meY > 932 * 0.64 && view.meY < 932 * 0.78, `自分は画面の下寄りで、投げるボタンに隠れない (y${view.meY} = ${Math.round(view.meY / 9.32)}%)`);
 
     // ---- 移動
     const center = async (sel) => phone.evaluate((s) => {
@@ -260,7 +275,7 @@ async function run() {
     await phone.waitForFunction(() => window.__app.me().aimF >= 1, null, { timeout: 3000 });
     await phone.waitForTimeout(100);
     const h2 = await phone.evaluate(() => ({ f: window.__app.me().aimF, crouch: window.__app.me().crouch,
-      ready: document.getElementById('throwPad').classList.contains('ready') }));
+      ready: document.getElementById('throwPad').classList.contains('ready'), cam: window.__app.camInfo() }));
     await phone.mouse.up();
     await phone.waitForTimeout(60);
     const h3 = await phone.evaluate(() => { const m = window.__app.match(); const n = m.balls.filter((b) => b.owner === m.human).length; m.balls = []; return { n, f: window.__app.me().aimF, rec: document.getElementById('throwPad').classList.contains('recover') }; });
@@ -270,8 +285,42 @@ async function run() {
     ok(h3.rec && !recEnd, '投げた直後はボタンが沈んで構え直し、終わると戻る');
     ok(h1.aiming && h1.f > 0.05 && h1.f < 0.8 && !h1.ready, `押さえ始めは構えの途中で、まだ赤くない (${h1.f.toFixed(2)})`);
     ok(h2.f === 1 && h2.ready, '押さえ続けると構えが定まり、投げるボタンが赤くなる');
+    ok(h2.cam.aimZoom > 0.8 && h2.cam.pos[1] < 5, `構えている間は、カメラが狙う相手の方へ寄る (寄り ${h2.cam.aimZoom.toFixed(2)}・高さ ${h2.cam.pos[1]}m)`);
+    await phone.waitForFunction(() => window.__app.camInfo().aimZoom < 0.05, null, { timeout: 6000 }).catch(() => {});
+    const camBack = await phone.evaluate(() => window.__app.camInfo());
+    ok(camBack.aimZoom < 0.05 && camBack.pos[1] > 7, `離すと、いつものカメラへ戻る (寄り ${camBack.aimZoom.toFixed(2)}・高さ ${camBack.pos[1]}m)`);
     ok(h1.crouch === false && h2.crouch === false, '構えている間は立つ');
     ok(h3.n === 1 && h3.f === 0, `離すと 1 個投げ、構えは 0 に戻る (投げた ${h3.n})`);
+
+    // ---- 取り消し: 押さえたまま外へ引っぱり、真ん中へ戻して離すと投げない
+    await phone.waitForFunction(() => window.__app.me().cd <= 0, null, { timeout: 12000 });
+    await phone.evaluate(() => { const me = window.__app.me(); me.balls = 3; window.__app.match().balls = []; });
+    await phone.mouse.move(pad.x, pad.y);
+    await phone.mouse.down();
+    await phone.mouse.move(pad.x - 70, pad.y - 30, { steps: 5 });
+    await phone.mouse.move(pad.x + 4, pad.y + 3, { steps: 5 });
+    await phone.waitForTimeout(80);
+    const cst = await phone.evaluate(() => ({ s: window.__app.cancelState(), label: getComputedStyle(document.querySelector('#throwPad .label'), '::after').content }));
+    await phone.mouse.up();
+    await phone.waitForTimeout(120);
+    const cAfter = await phone.evaluate(() => ({ balls: window.__app.me().balls, flying: window.__app.match().balls.filter((b) => b.owner === window.__app.match().human).length, cls: document.getElementById('throwPad').classList.contains('cancel'), f: window.__app.me().aimF }));
+    ok(cst.s.cancel && cst.s.cls && /やめる/.test(cst.label), `引っぱって真ん中へ戻すと「やめる」になる (${cst.label})`);
+    ok(cAfter.balls === 3 && cAfter.flying === 0 && !cAfter.cls && cAfter.f === 0, `そこで離すと投げない (雪玉 ${cAfter.balls}・飛んでいる ${cAfter.flying}・構え ${cAfter.f})`);
+
+    // ---- 必殺ゲージ: 満タンで投げるボタンが金色の「大玉!」になり、投げると大玉が飛ぶ
+    await phone.evaluate(() => { window.__app.match().sp[0] = 1; });
+    await phone.waitForTimeout(150);
+    const sup = await phone.evaluate(() => ({ cls: document.getElementById('throwPad').classList.contains('super'), label: document.getElementById('padLabel').textContent }));
+    await phone.mouse.move(pad.x, pad.y);
+    await phone.mouse.down();
+    await phone.waitForFunction(() => window.__app.me().aimF >= 1, null, { timeout: 12000 });
+    await phone.mouse.up();
+    await phone.waitForFunction(() => window.__app.match().balls.some((b) => b.big) || window.__app.match().sp[0] === 0, null, { timeout: 5000 }).catch(() => {});
+    const supAfter = await phone.evaluate(() => { const m = window.__app.match(); const big = m.balls.some((b) => b.big); m.balls = []; return { big, sp: m.sp[0] }; });
+    await phone.waitForTimeout(150);
+    const supLabel = await phone.evaluate(() => ({ cls: document.getElementById('throwPad').classList.contains('super'), label: document.getElementById('padLabel').textContent }));
+    ok(sup.cls && sup.label === '大玉!', `ゲージ満タンで投げるボタンが「大玉!」 (${sup.label})`);
+    ok(supAfter.big && supAfter.sp === 0 && !supLabel.cls && supLabel.label === '投げる', `投げると大玉が飛び、ゲージとボタンが戻る (大玉 ${supAfter.big}・ゲージ ${supAfter.sp}・${supLabel.label})`);
 
     // ---- 隠れている物の印: 狙っている相手が帯の下・画面の外なら、帯の下端に矢印。見えていれば出さない
     const marks = await phone.evaluate(async (ids) => {
@@ -296,21 +345,48 @@ async function run() {
       await wait();
       const bar = A.hudBottom();
       const far = { lock: shown('markLock'), target: A.app.lock && A.app.lock.target, y: Math.round(A.project(q.x, 1.0, q.z).y), bar: Math.round(bar) };
-      // フラッグ: 遠くからは印、すぐそば (見えている) なら出さない
-      me.z = 10.5; await wait();
+      // フラッグ: 隠れているときだけ印。低いカメラでは遠くからも見えるので、隠れる場面は前の高いカメラで作る
+      A.setCam({ h: 21, back: 10, ahead: 7, fov: 52 });
+      me.z = 10.5; await wait(); await wait();
       const flagFar = shown('markFlag');
+      A.setCam({ h: 8, back: 8, ahead: 7, fov: 58 });
+      me.x = 0; me.z = 10.5; await wait(); await wait();
+      const flagStartLow = { shown: shown('markFlag'), y: Math.round(A.project(0, 1.5, -window.Core.R.FLAG_U).y), bar: Math.round(A.hudBottom()) };
       me.x = 2; me.z = -9; await wait();
       const flagNear = shown('markFlag');
       me.x = 0; me.z = 8;
       reds.forEach((p) => { p.alive = true; });
       style.remove();
       window.dispatchEvent(new Event('resize'));
-      return { near, far, flagFar, flagNear };
+      return { near, far, flagFar, flagNear, flagStartLow };
     }, setup);
     ok(marks.near.target === setup.left && !marks.near.lock, '狙っている相手が見えていれば、矢印は出さない');
     ok(marks.far.target === setup.left && marks.far.y > marks.far.bar && !marks.far.lock,
       `届くいちばん遠い相手 (22m) も帯の下に見える (相手 y${marks.far.y} / 帯 y${marks.far.bar})`);
     ok(marks.flagFar && !marks.flagNear, `相手のフラッグは、隠れているときだけ印を出す (遠く ${marks.flagFar} / そば ${marks.flagNear})`);
+    ok(!marks.flagStartLow.shown && marks.flagStartLow.y > marks.flagStartLow.bar, `低いカメラでは、スタート地点から相手のフラッグが帯の下に見えている (y${marks.flagStartLow.y} / 帯 ${marks.flagStartLow.bar})`);
+
+    // ---- 壁に隠れた「狙っている相手」は透けて見える (低いカメラでは壁に隠れやすい)。狙っていない相手は透けない
+    await phone.waitForFunction(() => window.__app.match().phase === 'play', null, { timeout: 15000 });
+    const xr = await phone.evaluate(async () => {
+      const A = window.__app, C = window.Core, m = A.match(), me = A.me();
+      const w = C.SHELTERS.find((x) => x.x > 0 && x.z < 0 && x.z > -10);         // あか陣の右のシェルター
+      const reds = m.players.filter((p) => p.team === 1 && p.alive);
+      const q = reds[0], other = reds[1];
+      reds.forEach((p) => { p.ai.think = 999; p.ai.goal = null; p.balls = 0; p.vx = p.vz = 0; if (p !== q && p !== other) { p.x = -4.5; p.z = -17; } });
+      me.x = w.x; me.z = 3;
+      q.x = w.x - 0.3; q.z = w.z - w.d / 2 - C.R.PLAYER_R - 0.05; q.standT = 0;    // 壁のすぐ裏にしゃがむ (狙う相手。立っていると胸から上は壁の上に見えている)
+      other.x = -4.6; other.z = 9.5;                                               // 自陣の奥 (狙いの外)
+      const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+      await wait(900);
+      const locked = A.app.lock && A.app.lock.target;
+      // 狙いの外の相手も、壁の裏へ置いて比べる
+      other.x = w.x + 0.6; other.z = q.z;
+      await wait(400);
+      return { locked, q: q.id, xq: A.xray(q.id), xo: A.app.lock && A.app.lock.target === other.id ? null : A.xray(other.id) };
+    });
+    ok(xr.locked === xr.q && xr.xq === true, `狙っている相手が壁に隠れると、透けて見える (狙い ${xr.locked})`);
+    ok(xr.xo === false || xr.xo === null, `狙っていない相手は、壁に隠れても透けない (${xr.xo})`);
 
     // ---- 当てたときの手応え: 目の前で止まっている相手に、構えてから当てる
     // (上ではじいた玉が当たってセットが終わっていることがあるので、プレー中に戻るのを待つ)
@@ -341,10 +417,12 @@ async function run() {
       pop: [...document.querySelectorAll('#pops .hit-text b')].map((e) => e.textContent),
       center: (() => { const e = document.querySelector('#pops .hit-text'); if (!e) return null; const r = e.getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2, w: r.width }; })(),
       shake: window.__app.hitShake(),
+      hitCam: window.__app.camInfo().hitCam,
       combo: window.__app.app.combo.n
     }), victim);
     await phone.waitForFunction(() => !document.querySelector('#pops .hit-text'), null, { timeout: 3000 }).catch(() => {});
-    const hitGone = await phone.evaluate(() => ({ left: document.querySelectorAll('#pops .hit-text').length, shake: window.__app.hitShake() }));
+    await phone.waitForFunction(() => window.__app.camInfo().hitCam === 0, null, { timeout: 6000 }).catch(() => {});
+    const hitGone = await phone.evaluate(() => ({ left: document.querySelectorAll('#pops .hit-text').length, shake: window.__app.hitShake(), hitCam: window.__app.camInfo().hitCam }));
     const bashi = await phone.evaluate(() => window.__app.sound('bashi'));
     // (直前のはじく確かめで当たっていれば、連続ヒットの言葉になる)
     const fans = await phone.evaluate(() => window.__app.scenery());
@@ -353,6 +431,28 @@ async function run() {
     ok(juice.center && Math.abs(juice.center.x - 215) < 30 && juice.center.y > 300 && juice.center.y < 560 && juice.center.w > 200, `HIT!! は画面の真ん中に大きく出る (${juice.center && Math.round(juice.center.x)}, ${juice.center && Math.round(juice.center.y)} / 幅 ${juice.center && Math.round(juice.center.w)})`);
     ok(juice.shake > 0 && hitGone.shake === 0, `当てた瞬間だけ画面が揺れ、すぐ収まる (${juice.shake.toFixed(2)} → ${hitGone.shake})`);
     ok(hitGone.left === 0, 'HIT!! は消える (残らない)');
+    ok(juice.hitCam > 0 && hitGone.hitCam === 0, `当てた瞬間はカメラが当てた相手へ寄り、すぐ戻る (${juice.hitCam.toFixed(2)} → ${hitGone.hitCam})`);
+    // セットの決着も真ん中に大きく。縁は勝ったチームの色。HIT!! が出ている間は、それが消えてから出す
+    const setRes = await phone.evaluate(async () => {
+      const A = window.__app, m = A.match();
+      const q = m.players.find((p) => p.team === 1 && p.alive);
+      m.events.push({ type: 'hit', player: q.id, by: m.human, x: q.x, y: 1, z: q.z, vx: 0, vz: -1 });
+      m.events.push({ type: 'setEnd', reason: 'flag', winner: 0, setNo: 1, points: [10, 5] });
+      const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+      await wait(150);
+      const during = { hit: !!document.querySelector('#pops .hit-text'), result: !!document.querySelector('#pops .result-text') };
+      await wait(700);
+      const e = document.querySelector('#pops .result-text');
+      const r = e && e.getBoundingClientRect();
+      const out = { during, lines: e ? [...e.querySelectorAll('b')].map((b) => b.textContent) : [], blue: !!e && e.classList.contains('blue'),
+        inside: !!r && r.left >= 0 && r.right <= 430, banner: document.getElementById('banner').hidden };
+      document.querySelectorAll('#pops .big-text').forEach((x) => x.remove());
+      q.alive = true;
+      return out;
+    });
+    ok(setRes.during.hit && !setRes.during.result, 'HIT!! と決着が重なるときは、HIT!! が先 (決着の字はまだ出ない)');
+    ok(setRes.lines[0] === 'フラッグ奪取!' && setRes.lines[1] === 'あおの勝ち!' && setRes.blue && setRes.inside && setRes.banner,
+      `セットの決着は真ん中に大きく、勝ったチームの色の縁で、画面に収まる (${setRes.lines.join(' / ')})`);
     ok(bashi && bashi.peak > 0.2 && bashi.peak < 0.9, `「バシッ!」の大きさ: いちばん大きい所 ${bashi && bashi.peak.toFixed(2)} (0.2〜0.9) / 平均 ${bashi && bashi.rms.toFixed(3)}`);
 
     // ---- 止まるとしゃがんで丸める
@@ -464,10 +564,11 @@ async function run() {
     const foul = await phone.evaluate(() => ({ r: window.__app.match().setResults.slice(-1)[0], ban: document.getElementById('banner').textContent }));
     ok(foul.r && foul.r.reason === 'over' && foul.r.winner === 1, `4 人目が入るとセット負け (${foul.ban})`);
     // 前の確かめでセットが終わっていると、ここで試合が決まることがある。そのときは新しい試合で続ける
-    await phone.waitForFunction(() => window.__app.match().phase === 'play' || !document.getElementById('vResult').hidden, null, { timeout: 10000 });
+    // (セットの終わり 3 秒 + 秒読み 2 秒。この機械では試合の時間が実時間の半分ほどで進むので、上限は長めに)
+    await phone.waitForFunction(() => window.__app.match().phase === 'play' || !document.getElementById('vResult').hidden, null, { timeout: 20000 });
     if (await phone.evaluate(() => !document.getElementById('vResult').hidden)) {
       await phone.click('#btnAgain');
-      await phone.waitForFunction(() => window.__app.match().phase === 'play', null, { timeout: 10000 });
+      await phone.waitForFunction(() => window.__app.match().phase === 'play', null, { timeout: 20000 });
     }
 
     // ---- ビクトリースロー
@@ -514,6 +615,9 @@ async function run() {
     const vtRes = await phone.evaluate(() => ({ hidden: document.getElementById('vResult').hidden, text: document.getElementById('resultSets').textContent, by: window.__app.match().decidedBy }));
     ok(!vtRes.hidden && vtRes.by === 'vt' && vtRes.text.includes('ビクトリースロー'), `ビクトリースローで決着し、結果に出る (${vtRes.text.slice(-40)})`);
     await phone.click('#btnAgain');
+    await phone.waitForTimeout(200);
+    const startBan = await phone.evaluate(() => { const b = document.getElementById('banner'); const r = b.getBoundingClientRect(); return { hidden: b.hidden, text: b.textContent, w: r.width, h: r.height }; });
+    ok(!startBan.hidden && startBan.w > startBan.h * 1.5, `始まりの帯 (${startBan.text}) が縦に潰れない (${Math.round(startBan.w)}x${Math.round(startBan.h)})`);
     await phone.waitForFunction(() => window.__app.match().phase === 'play', null, { timeout: 10000 });
     const back = await phone.evaluate(() => getComputedStyle(document.querySelector('#stickZone')).visibility);
     ok(back === 'visible', '次の試合では操作が戻る');
@@ -528,16 +632,26 @@ async function run() {
     });
     await phone.waitForFunction(() => window.__app.match().phase === 'setOver', null, { timeout: 5000 });
     await phone.waitForTimeout(60);
+    await phone.waitForFunction(() => document.querySelector('#pops .result-text'), null, { timeout: 3000 }).catch(() => {});
     const ban = await phone.evaluate(() => {
-      const b = document.getElementById('banner');
-      const r = b.getBoundingClientRect();
-      return { hidden: b.hidden, text: b.textContent, w: r.width, h: r.height };
+      const b = document.querySelector('#pops .result-text');
+      const r = b ? b.getBoundingClientRect() : { width: 0, height: 0 };
+      return { shown: !!b, text: b ? [...b.querySelectorAll('b')].map((x) => x.textContent).join(' / ') : '', w: r.width, h: r.height };
     });
-    ok(!ban.hidden && ban.text.includes('全員アウト') && ban.text.includes('10 - 0 pt'), `セットの結果とポイントが出る (${ban.text})`);
-    ok(ban.w > ban.h * 1.5, `帯が縦に潰れない (${Math.round(ban.w)}x${Math.round(ban.h)})`);
+    ok(ban.shown && ban.text.includes('全員アウト') && ban.text.includes('あおの勝ち') && ban.text.includes('10 - 0 pt'), `セットの結果とポイントが真ん中に大きく出る (${ban.text})`);
+    ok(ban.w > 250 && ban.w <= 430, `決着の字が画面の幅に収まる (${Math.round(ban.w)}x${Math.round(ban.h)})`);
     await phone.waitForFunction(() => !document.getElementById('vResult').hidden, null, { timeout: 10000 });
     const res = await phone.evaluate(() => ({ t: document.getElementById('resultTitle').textContent, n: document.querySelectorAll('#resultSets li').length }));
     ok(res.t.includes('勝利'), `2 セット取ると試合終了の画面 (${res.t}, ${res.n} 行)`);
+    const look2 = await phone.evaluate(() => {
+      const v = document.getElementById('vResult'), t = document.getElementById('resultTitle');
+      const r = t.getBoundingClientRect();
+      return { win: v.classList.contains('win'), rays: getComputedStyle(document.querySelector('#vResult .rays')).display, confetti: document.querySelectorAll('#confetti i').length,
+        dataT: t.dataset.t, text: t.textContent, score: document.getElementById('resultScore').textContent.replace(/\s+/g, ''), inside: r.left >= 0 && r.right <= 430 };
+    });
+    ok(look2.win && look2.rays === 'block' && look2.confetti >= 30, `勝つと光の筋と紙吹雪 (紙吹雪 ${look2.confetti})`);
+    ok(look2.dataT === look2.text && look2.inside, `「勝利!」の縁取りが字と同じで、画面に収まる (${look2.dataT})`);
+    ok(/あお2.*あか0/.test(look2.score), `取ったセットの数が大きく出る (${look2.score})`);
     const totals = await phone.evaluate(() => document.getElementById('resultSets').textContent);
     ok(/ポイント \d+ - \d+/.test(totals) && totals.includes('セット数で決着'), `結果にポイント合計と決め手が出る`);
     await phone.click('#btnAgain');

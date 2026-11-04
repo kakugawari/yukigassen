@@ -3,14 +3,13 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
-<title>雪合戦 フラッグ7</title>
+<title>スノーバトル</title>
 <meta name="description" content="7対7のスポーツ雪合戦。雪玉を狙って投げ、敵陣のフラッグを奪う">
 <meta name="theme-color" content="#cfe3f5">
 <meta name="apple-mobile-web-app-capable" content="yes">
-<link rel="icon" href="./icon.svg" type="image/svg+xml">
 <link rel="icon" href="./icon-512.png" type="image/png" sizes="512x512">
 <link rel="apple-touch-icon" href="./apple-touch-icon.png">
-<meta name="apple-mobile-web-app-title" content="雪合戦7">
+<meta name="apple-mobile-web-app-title" content="スノーバトル">
 <link rel="stylesheet" href="./styles.css">
 </head>
 <body>
@@ -49,7 +48,8 @@
     <div class="throw" id="throwPad">
       <span class="ring" id="makeRing"></span>
       <div class="balls" id="myBalls"></div>
-      <span class="label">投げる</span>
+      <span class="label" id="padLabel">投げる</span>
+      <span class="sp" id="spGauge" aria-label="必殺ゲージ"><i></i><b>必殺</b></span>
     </div>
   </div>
 
@@ -62,14 +62,17 @@
 
   <!-- タイトル -->
   <section class="screen" id="vTitle">
+    <div class="snow" aria-hidden="true"></div>
     <div class="title-card">
-      <h1><span>雪合戦</span><b>フラッグ7</b></h1>
-      <p class="tag">7対7 ・ 2セット先取 ・ 当たったら退場</p>
-      <div class="diff" role="group" aria-label="投げ方">
-        <button type="button" data-mode="easy" class="on">かんたん<small>押すとすぐ投げる・玉が追う</small></button>
-        <button type="button" data-mode="hard">むずかしい<small>押さえて構え、離して投げる</small></button>
+      <div class="logo">
+        <h1 class="logo-img"><img src="./logo.webp" alt="" width="880" height="292" decoding="async"><span class="sr">雪合戦 スノーバトル</span></h1>
+        <p class="tag">7対7 ・ 2セット先取 ・ 当たったら退場</p>
       </div>
-      <button type="button" class="btn-start" id="btnStart">試合開始</button>
+      <div class="diff" role="group" aria-label="投げ方">
+        <button type="button" data-mode="easy" class="on"><i class="ico">⚡</i>かんたん<small>押すとすぐ投げる・玉が追う</small></button>
+        <button type="button" data-mode="hard"><i class="ico">🎯</i>むずかしい<small>押さえて構え、離して投げる</small></button>
+      </div>
+      <button type="button" class="btn-start" id="btnStart"><span>試合開始</span></button>
       <details class="rules">
         <summary>あそびかた・ルール</summary>
         <ul>
@@ -83,7 +86,7 @@
           <li>投げたあとは<b>構え直し</b>(約1秒)。続けては投げられない</li>
           <li><b>壁のすぐ裏</b>にいれば、正面からは当たらない(頭越しには狙われない)。壁の裏で投げると、<b>自動で横へのぞいて投げ、戻る</b>。のぞいている間は当たる</li>
         </ul>
-        <p class="how">左側をなぞって移動。右下の<b>投げる</b>で、足もとに輪が出ている相手へ投げる。輪が<b>赤</b>なら当たるコース(灰色は壁に隠れている)。押したまま<b>相手の方へずらす</b>と、その相手を狙う。動きの先読みも、壁越しの山なりも自動。<br><b>かんたん</b>: 押すとすぐ投げ、玉が相手へ曲がっていく。<br><b>むずかしい</b>: 押さえている間に輪が締まり、<b>締まりきって赤</b>で離すと当たる(すぐ離すとぶれる)。構えている間は立つので、相手からも狙われる。</p>
+        <p class="how">左側をなぞって移動。右下の<b>投げる</b>で、足もとに輪が出ている相手へ投げる。輪が<b>赤</b>なら当たるコース(灰色は壁に隠れている)。押したまま<b>相手の方へずらす</b>と、その相手を狙う。動きの先読みも、壁越しの山なりも自動。<br><b>かんたん</b>: 押すとすぐ投げ、玉が相手へ曲がっていく。<br><b>むずかしい</b>: 押さえている間に輪が締まり、<b>締まりきって赤</b>で離すと当たる(すぐ離すとぶれる)。構えている間は立つので、相手からも狙われる。<br><b>取り消し</b>: 押さえたまま外へ引っぱり、真ん中へ戻して離すと投げない。むずかしいでは、狙い続けると相手が壁の陰にしゃがむ(「サッ」)。立ち上がったあと少しの間はしゃがまないので、取り消して待ってから狙うのがコツ(フェイント)。<br><b>必殺の大玉</b>: 当てるとゲージが貯まり、2 回で満タン。次の 1 球が大玉になり、落ちた所のまわりの相手もアウト(壁の陰は助かる)。</p>
       </details>
     </div>
   </section>
@@ -99,10 +102,13 @@
 
   <!-- 試合結果 -->
   <section class="screen" id="vResult" hidden>
-    <div class="card">
-      <h2 id="resultTitle">勝利!</h2>
+    <div class="rays" aria-hidden="true"></div>
+    <div class="confetti" id="confetti" aria-hidden="true"></div>
+    <div class="card result-card">
+      <h2 id="resultTitle" class="result-title" data-t="勝利!">勝利!</h2>
+      <div class="scoreline" id="resultScore"></div>
       <ol class="sets-list" id="resultSets"></ol>
-      <button type="button" class="btn-start" id="btnAgain">もう一度</button>
+      <button type="button" class="btn-start" id="btnAgain"><span>もう一度</span></button>
       <button type="button" class="btn-sub" id="btnToTitle">タイトルへ</button>
     </div>
   </section>

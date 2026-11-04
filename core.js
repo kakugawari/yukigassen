@@ -46,7 +46,13 @@
     PEEK_NEAR: 0.6,       // 壁からこれより近く (体のふちから) にいて、壁越しに投げるなら「のぞき投げ」
     PEEK_OUT: 0.25,       // のぞくとき、壁の端からさらに出る量 (体の半径に足す)
     PEEK_MAX: 2.5,        // のぞいたまま待つ上限 (秒)
-    HOMING_TURN: 2.0,     // かんたん: 人の玉が相手へ曲がる速さ (rad/s、水平だけ)
+    HOMING_TURN: 2.0,
+    SP_PER_HIT: 0.5,      // 必殺ゲージ: 人が当てるたびに貯まる (2 回で満タン)
+    BIG_R: 0.34,          // 必殺の大玉の半径 (ふつうは 0.11)。当たりやすい
+    SPLASH_R: 1.6,        // 大玉が落ちた所から、この距離の相手もアウト (壁の陰は除く)
+    DUCK_AT: 0.4,         // むずかしい: 人がこれ以上構えると、狙われた AI は壁の陰にしゃがむことがある
+    DUCK_TIME: 1.0,       // しゃがんでいる時間 (秒)。そのあと DUCK_CALM 秒は、もうしゃがまない (フェイントの狙いどき)
+    DUCK_CALM: 2.0,     // かんたん: 人の玉が相手へ曲がる速さ (rad/s、水平だけ)
     MAKE_TIME: 0.6,       // 1 個丸める時間 (0.9 秒では、生きている時間の 6 割が雪玉 0 個だった)
     MAX_CARRY: 3,         // 一度に持てる数。使い切ったら、しゃがんで丸め直す (その間は攻められない)
     START_CARRY: 3,
@@ -147,6 +153,8 @@
       players: [],
       balls: [],
       stock: [0, 0],
+      sp: [0, 0],          // 必殺ゲージ (0〜1)。人が当てると貯まる。試合を通して持ち越す
+      humanAim: null,      // むずかしい: 人がいま構えている相手 { target, f }
       events: [],
       nextBallId: 1,
       winner: null
@@ -249,8 +257,14 @@
       x: p.x + L.ux * (R.PLAYER_R + 0.05), z: p.z + L.uz * (R.PLAYER_R + 0.05), y: R.THROW_Y,
       vx: L.vx, vy: L.vy, vz: L.vz, age: 0,
       // かんたん: 狙った相手へ曲がっていく (ビクトリースローは除く)
-      home: human && m.aimMode === 'easy' && target != null && m.phase === 'play' && !m.vt ? target : null
+      home: human && m.aimMode === 'easy' && target != null && m.phase === 'play' && !m.vt ? target : null,
+      human
     };
+    // 必殺ゲージが満タンなら、この 1 球は大玉 (ビクトリースローは除く)
+    if (human && !m.vt && m.sp[p.team] >= 1) {
+      b.big = true; b.r = R.BIG_R; m.sp[p.team] = 0;
+      m.events.push({ type: 'bigThrow', player: p.id, ball: b.id });
+    }
     m.balls.push(b);
     p.balls--;
     p.cd = R.THROW_CD;
@@ -266,20 +280,22 @@
    * @returns {null | {kind:'ground'|'shelter'|'player'|'out', shelter?, player?}}
    */
   function ballCollide(b, players) {
+    // 大玉 (b.r) が大きいのは人への当たりだけ。地面と壁はふつうの玉と同じ (狙いの見積もりとずれないように)
+    const br = b.r || R.BALL_R, wr = R.BALL_R;
     if (Math.abs(b.x) > R.HALF_W + 3 || Math.abs(b.z) > R.HALF_L + 4) return { kind: 'out' };
-    if (b.y <= R.BALL_R) return { kind: 'ground' };
+    if (b.y <= wr) return { kind: 'ground' };
     for (let i = 0; i < SHELTERS.length; i++) {
       const s = SHELTERS[i];
-      if (b.y <= s.h + R.BALL_R * 0.5 &&
-          Math.abs(b.x - s.x) <= s.w / 2 + R.BALL_R &&
-          Math.abs(b.z - s.z) <= s.d / 2 + R.BALL_R) return { kind: 'shelter', shelter: i };
+      if (b.y <= s.h + wr * 0.5 &&
+          Math.abs(b.x - s.x) <= s.w / 2 + wr &&
+          Math.abs(b.z - s.z) <= s.d / 2 + wr) return { kind: 'shelter', shelter: i };
     }
     if (players) {
       for (const p of players) {
         if (!p.alive || p.team === b.team) continue;
         const dx = b.x - p.x, dz = b.z - p.z;
-        const rr = R.PLAYER_R + R.BALL_R;
-        if (dx * dx + dz * dz <= rr * rr && b.y <= playerHeight(p) + R.BALL_R * 0.5) {
+        const rr = R.PLAYER_R + br;
+        if (dx * dx + dz * dz <= rr * rr && b.y <= playerHeight(p) + br * 0.5) {
           return { kind: 'player', player: p };
         }
       }
@@ -323,6 +339,34 @@
     b.vx = Math.sin(a) * sp; b.vz = Math.cos(a) * sp;
   }
 
+  /** 線分が壁 (箱) を通るか (端も含む) */
+  function segBlocked(x0, z0, x1, z1) {
+    for (const s of SHELTERS) {
+      let t0 = 0, t1 = 1, ok = true;
+      for (const [p0, d, lo, hi] of [[x0, x1 - x0, s.x - s.w / 2, s.x + s.w / 2], [z0, z1 - z0, s.z - s.d / 2, s.z + s.d / 2]]) {
+        if (Math.abs(d) < 1e-9) { if (p0 < lo || p0 > hi) { ok = false; break; } continue; }
+        let a = (lo - p0) / d, c = (hi - p0) / d;
+        if (a > c) { const t = a; a = c; c = t; }
+        t0 = Math.max(t0, a); t1 = Math.min(t1, c);
+        if (t0 > t1) { ok = false; break; }
+      }
+      if (ok) return true;
+    }
+    return false;
+  }
+
+  /** 大玉が落ちた (人に当たった) 所のまわり SPLASH_R の相手もアウト。間に壁があれば助かる */
+  function splash(m, b) {
+    m.events.push({ type: 'splash', x: b.x, z: b.z, by: b.owner });
+    for (const q of m.players) {
+      if (!q.alive || q.team === b.team) continue;
+      if (Math.hypot(q.x - b.x, q.z - b.z) > R.SPLASH_R) continue;
+      if (segBlocked(b.x, b.z, q.x, q.z)) continue;
+      q.alive = false; q.outAt = m.time;
+      m.events.push({ type: 'hit', player: q.id, by: b.owner, x: q.x, y: 1, z: q.z, vx: q.x - b.x, vz: q.z - b.z, big: true, splash: true });
+    }
+  }
+
   function stepBalls(m, dt) {
     const keep = [];
     for (const b of m.balls) {
@@ -342,10 +386,12 @@
         const p = hit.player;
         p.alive = false;
         p.outAt = m.time;
-        m.events.push({ type: 'hit', player: p.id, by: b.owner, x: b.x, y: b.y, z: b.z, vx: b.vx, vz: b.vz });
+        m.events.push({ type: 'hit', player: p.id, by: b.owner, x: b.x, y: b.y, z: b.z, vx: b.vx, vz: b.vz, big: !!b.big });
+        if (b.human && !b.big) m.sp[b.team] = Math.min(1, m.sp[b.team] + R.SP_PER_HIT);
       } else if (hit.kind !== 'out') {
-        m.events.push({ type: 'splat', on: hit.kind, x: b.x, y: Math.max(b.y, 0.02), z: b.z });
+        m.events.push({ type: 'splat', on: hit.kind, x: b.x, y: Math.max(b.y, 0.02), z: b.z, big: !!b.big });
       }
+      if (b.big && hit.kind !== 'out' && hit.kind !== 'shelter') splash(m, b);
     }
     m.balls = keep;
   }
@@ -667,6 +713,19 @@
     const ai = p.ai;
     const s = skillOf(m, p);
     const input = { mx: 0, mz: 0, crouch: false, throwAt: null };
+
+    // むずかしい: 人に長く狙われたら、壁の陰にしゃがむ (1 回しゃがんだら、しばらくは気にしない = フェイントの狙いどき)
+    ai.calmT = Math.max(0, (ai.calmT || 0) - dt);
+    if (ai.duckT > 0) {
+      ai.duckT -= dt;
+      if (ai.duckT <= 0) ai.calmT = R.DUCK_CALM;
+      input.crouch = true;
+      return input;
+    }
+    const ha = m.humanAim;
+    if (ha && ha.target === p.id && ha.f >= R.DUCK_AT && ai.calmT <= 0 && !p.peek && !ai.rush) {
+      if (!ai.duckRolled) { ai.duckRolled = true; if (m.rng() < lerp(0.35, 0.8, s)) { ai.duckT = R.DUCK_TIME; m.events.push({ type: 'duck', player: p.id }); input.crouch = true; return input; } }
+    } else if (!ha || ha.target !== p.id) ai.duckRolled = false;
 
     // よける
     if (ai.dodgeT > 0) {
@@ -1119,6 +1178,7 @@
       p.standT = Math.max(0, p.standT - dt);
       let inp = isHuman(m, p) ? (input || {}) : aiInput(m, p, dt);
       if (isHuman(m, p)) {
+        m.humanAim = (inp.aiming && inp.aimTarget != null && m.aimMode !== 'easy') ? { target: inp.aimTarget, f: p.aimF } : null;
         const thr = inp.throwAt;     // 離した瞬間に投げる: そのコマまでの構えで決まる
         inp = stepAim(m, p, thr ? Object.assign({}, inp, { aiming: true }) : inp, thr ? 0 : dt);
       }

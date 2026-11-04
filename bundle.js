@@ -22,6 +22,8 @@ html = html.replace('<script src="./core.js"></script>', () => `<script>window.A
 for (const f of ['three.min.js', 'core.js', 'app.js']) {
   html = html.replace(`<script src="./${f}"></script>`, () => `<script>\n${safe(read(f))}\n</script>`);
 }
+// タイトルのロゴの絵も埋め込む
+html = html.replace('src="./logo.webp"', () => `src="data:image/webp;base64,${fs.readFileSync(path.join(ROOT, 'logo.webp')).toString('base64')}"`);
 if (/src="\.\//.test(html) || /href="\.\//.test(html)) throw new Error('まとめ損ねた読み込みがある');
 fs.mkdirSync(path.dirname(out), { recursive: true });
 fs.writeFileSync(out, html);

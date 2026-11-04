@@ -7,13 +7,19 @@
   const C = window.Core;
   const R = C.R;
   const T = window.THREE;
-  const VERSION = 'v12';
+  const VERSION = 'v17';
   const AI_SKILL = 0.5;      // 相手の強さ (前の「ふつう」)。強さのえらびはやめ、投げ方をえらぶ
-  const AUTO_CROUCH = 0.2;   // 止まってからしゃがむまで (秒)
+  const AUTO_CROUCH = 0.2;
+  const CANCEL = { out: 40, back: 18 };   // 投げるボタン: 40px 以上引っぱってから 18px 以内へ戻して離すと取り消し   // 止まってからしゃがむまで (秒)
   // カメラ: 自分の (h) 上・(back) 後ろから、(ahead) 先の地面を見る
   // ahead は 5 → 7: 5 だとスタート地点から相手のシェルター・バックラインが上の帯の下に隠れ、
   // 狙っている相手が見えなかった (自分は画面の 68% → 75% の高さへ下がる)
-  const CAM = { h: 21, back: 10, ahead: 7, fov: 52 };
+  // カメラ: 低め (8m 上・8m 後ろ、見下ろし約 24°)。臨場感を出すため 21m 上の見下ろしから下げた
+  const CAM = { h: 8, back: 8, ahead: 7, fov: 58 };   // 自分は画面の 71% の高さ。届くいちばん遠い相手 (22m) とフラッグは帯の下に見える
+  // 構えている間は、狙う相手の方へ寄る (自分の 5m 後ろ・4m 上から、自分と相手のあいだを見る)
+  const AIM_CAM = { back: 5, up: 4, look: 0.55, rate: 8, holdMs: 150 };
+  // 自分が当てた瞬間は、当てた相手へ寄る (0.75 秒。寄る量はいちばん寄って 65%)
+  const HIT_CAM = { time: 0.75, dist: 6, up: 3.5, amount: 0.65 };
 
   const $ = (id) => document.getElementById(id);
   const els = {
@@ -22,7 +28,8 @@
     setNo: $('setNo'), time: $('time'), stockBlue: $('stockBlue'), stockRed: $('stockRed'),
     ptsBlue: $('ptsBlue'), ptsRed: $('ptsRed'), inEnemy: $('inEnemy'), warn: $('warn'),
     stickZone: $('stickZone'), stick: $('stick'), knob: $('knob'), moveHint: $('moveHint'),
-    makeRing: $('makeRing'), throwPad: $('throwPad'), myBalls: $('myBalls'), pops: $('pops'),
+    resultScore: $('resultScore'), confetti: $('confetti'), snow: document.querySelector('#vTitle .snow'),
+    makeRing: $('makeRing'), throwPad: $('throwPad'), myBalls: $('myBalls'), pops: $('pops'), spGauge: $('spGauge'), padLabel: $('padLabel'),
     markLock: $('markLock'), markFlag: $('markFlag'), markFlagText: $('markFlagText'), score: document.querySelector('.score'),
     banner: $('banner'),
     vTitle: $('vTitle'), vPause: $('vPause'), vResult: $('vResult'),
@@ -499,10 +506,12 @@
   // ------------------------------------------------------------ 雪玉と粉雪
   const ballGeo = new T.SphereGeometry(0.15, 12, 8);
   const ballMat = lambert(0xffffff, { emissive: 0x334455 });
+  const bigBallMat = lambert(0xfff6d8, { emissive: 0x806020 });   // 大玉はうっすら金色に光る
   function ballView(b) {
     let v = views.balls.get(b.id);
     if (!v) {
-      v = { mesh: new T.Mesh(ballGeo, ballMat), shadow: blob(0.16, 0.8) };
+      v = { mesh: new T.Mesh(ballGeo, b.big ? bigBallMat : ballMat), shadow: blob(b.big ? 0.5 : 0.16, 0.8) };
+      if (b.big) v.mesh.scale.setScalar(R.BIG_R / R.BALL_R * 0.75);   // 大玉 (当たりの大きさに合わせる)
       scene.add(v.mesh);
       views.balls.set(b.id, v);
     }
@@ -695,7 +704,7 @@
       if (app.aim) return;
       e.preventDefault();
       capture(els.throwPad, e.pointerId);
-      app.aim = { id: e.pointerId, sx: e.clientX, sy: e.clientY, dx: 0, dy: 0, len: 0 };
+      app.aim = { id: e.pointerId, sx: e.clientX, sy: e.clientY, dx: 0, dy: 0, len: 0, t0: performance.now() };
       els.throwPad.classList.add('on');
       sound.unlock();
     });
@@ -704,14 +713,20 @@
       if (!a || a.id !== e.pointerId) return;
       a.dx = e.clientX - a.sx; a.dy = e.clientY - a.sy;
       a.len = Math.hypot(a.dx, a.dy);
+      a.maxLen = Math.max(a.maxLen || 0, a.len);
+      // 一度引っぱってから真ん中へ戻すと「取り消し」 (離しても投げない)
+      const cancel = a.maxLen >= CANCEL.out && a.len < CANCEL.back;
+      if (cancel !== !!app.aimCancel) { app.aimCancel = cancel; els.throwPad.classList.toggle('cancel', cancel); }
     });
     const release = (e, cancel) => {
       const a = app.aim;
       if (!a || a.id !== e.pointerId) return;
       app.aim = null;
       els.throwPad.classList.remove('on');
+      const wasCancel = !!app.aimCancel;
+      app.aimCancel = false; els.throwPad.classList.remove('cancel');
       updateAim();
-      if (cancel) return;
+      if (cancel || wasCancel) return;     // 取り消し: 投げない (むずかしいなら構えも 0 に戻り、のぞいていれば戻る)
       const p = me();
       if (!p || !p.alive) return;
       // 離した瞬間の指で狙いを決める
@@ -807,6 +822,8 @@
       unlock, measure,
       throw() { burst(0.16, 1400, 0.8, 0.25, 'bandpass'); },
       steady() { tone(1320, 0.07, 0.12, 'triangle'); },
+      /** 大玉を投げた: 低くうなる音 */
+      big() { tone(220, 0.35, 0.3, 'sawtooth', 90); burst(0.3, 600, 0.7, 0.3, 'lowpass'); },
       splat(near) { burst(0.12, 500, 0.7, near ? 0.5 : 0.22, 'lowpass'); },
       hit(combo) {
         burst(0.2, 700, 0.6, 0.6, 'lowpass');
@@ -860,17 +877,33 @@
    */
   const HIT_SHAKE = { time: 0.2, amp: 0.22 };   // 揺れ: 0.2 秒、はじめ 0.22m (画面で 8px ほど) から 0 へ
   function hitText(sub) {
+    app.hitTextUntil = performance.now() + 500;
+    return bigText([{ t: 'HIT!!', cls: 'l1' }, sub && { t: sub, cls: 'sub' }], 'red', 500, 'hit-text');
+  }
+
+  /**
+   * 画面の真ん中に大きな字 (HIT!! と同じ作り: 斜めの太字、白い字にチーム色の縁・その外に黒い縁)。
+   * lines: [{ t: 字, cls: 'l1' | 'l2' | 'sub' | 'info' }]。color: 'red' | 'blue' | 'gray'。
+   * 飛び出して、持ちこたえ、少し縮みながら消える。HIT!! が出ている間は、それが消えてから出す
+   */
+  function bigText(lines, color, dur, extra) {
     const el = document.createElement('div');
-    el.className = 'hit-text';
-    el.innerHTML = '<b data-t="HIT!!">HIT!!</b>' + (sub ? `<small data-t="${sub}">${sub}</small>` : '');
-    els.pops.appendChild(el);
-    const a = el.animate([
-      { transform: 'translate(-50%, -50%) rotate(-8deg) skewX(-12deg) scale(1.9)', opacity: 0 },
-      { transform: 'translate(-50%, -50%) rotate(-8deg) skewX(-12deg) scale(1)', opacity: 1, offset: 0.16 },
-      { transform: 'translate(-50%, -50%) rotate(-8deg) skewX(-12deg) scale(1.04)', opacity: 1, offset: 0.55 },
-      { transform: 'translate(-50%, -50%) rotate(-8deg) skewX(-12deg) scale(.72)', opacity: 0 }
-    ], { duration: 500, easing: 'ease-out' });
-    a.onfinish = () => el.remove();
+    el.className = 'big-text ' + (color || 'red') + (extra ? ' ' + extra : '');
+    const esc = (t) => String(t).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]);
+    el.innerHTML = lines.filter(Boolean).map((l) => `<b class="${l.cls}" data-t="${esc(l.t)}">${esc(l.t)}</b>`).join('');
+    const hold = dur <= 600 ? 0.55 : 0.85;
+    const run = () => {
+      els.pops.appendChild(el);
+      const a = el.animate([
+        { transform: 'translate(-50%, -50%) rotate(-8deg) skewX(-12deg) scale(1.9)', opacity: 0 },
+        { transform: 'translate(-50%, -50%) rotate(-8deg) skewX(-12deg) scale(1)', opacity: 1, offset: Math.min(0.16, 80 / dur) },
+        { transform: 'translate(-50%, -50%) rotate(-8deg) skewX(-12deg) scale(1.04)', opacity: 1, offset: hold },
+        { transform: 'translate(-50%, -50%) rotate(-8deg) skewX(-12deg) scale(.72)', opacity: 0 }
+      ], { duration: dur, easing: 'ease-out' });
+      a.onfinish = () => el.remove();
+    };
+    const wait = extra === 'hit-text' ? 0 : Math.max(0, (app.hitTextUntil || 0) - performance.now());
+    if (wait > 0) setTimeout(run, wait); else run();
     return el;
   }
 
@@ -900,6 +933,7 @@
   }
 
   const REASON = { flag: 'フラッグ奪取!', allout: '全員アウト', time: '時間切れ', over: '敵陣に4人目 (反則)' };
+  const BIG_REASON = { flag: 'フラッグ奪取!', allout: '全員アウト!', time: '時間切れ', over: '4人目で反則!' };
   const DECIDED = { sets: 'セット数', points: 'ポイント合計', vt: 'ビクトリースロー' };
 
   function handleEvents() {
@@ -921,6 +955,19 @@
           if (v) v.throwT = 0.35;
           const p = m.players[e.player];
           if (p && Math.hypot(p.x - camLook.x, p.z - camLook.z) < 14) sound.throw();
+          break;
+        }
+        case 'bigThrow': sound.big(); break;
+        case 'splash': {
+          // 大玉が落ちた所: 大きな粉雪と、強めの揺れ
+          puff(e.x, 0.3, e.z, 40, 2.4);
+          app.hitShake = HIT_SHAKE.time * 1.4; sound.bashi();
+          break;
+        }
+        case 'duck': {
+          // むずかしい: 狙われた相手がしゃがんだ (フェイントの合図)
+          const q = m.players[e.player];
+          if (q) popText('サッ', q.x, 2.4, q.z, 0);
           break;
         }
         case 'splat': {
@@ -948,6 +995,7 @@
             puff(e.x, e.y, e.z, 30, 1.8);
             app.slowT = 0.16;
             app.hitShake = HIT_SHAKE.time;          // 画面を一瞬だけ揺らす (すぐ収まる)
+            app.hitCam = { t: 0, x: e.x, z: e.z };    // 当てた相手へ寄る
             const now = performance.now() / 1000;
             app.combo.n = now - app.combo.t < 6 ? app.combo.n + 1 : 1;
             app.combo.t = now;
@@ -963,8 +1011,11 @@
         case 'handOver': break;
         case 'setEnd': {
           sound.whistle(true);
-          const who = e.winner === 0 ? 'あおの勝ち' : e.winner === 1 ? 'あかの勝ち' : '引き分け';
-          showBanner(`${REASON[e.reason]}<small>SET ${e.setNo} ${who} ・ ${e.points[0]} - ${e.points[1]} pt</small>`, e.winner === 0 ? 'blue' : e.winner === 1 ? 'red' : '', R.SET_OVER);
+          const who = e.winner === 0 ? 'あおの勝ち!' : e.winner === 1 ? 'あかの勝ち!' : '引き分け';
+          // 決め手と勝ったチームを真ん中に大きく (縁は勝ったチームの色)。下に小さく点数
+          els.banner.hidden = true;
+          bigText([{ t: BIG_REASON[e.reason], cls: 'l1' }, { t: who, cls: 'l2' }, { t: `SET ${e.setNo} ・ ${e.points[0]} - ${e.points[1]} pt`, cls: 'info' }],
+            e.winner === 0 ? 'blue' : e.winner === 1 ? 'red' : 'gray', (R.SET_OVER - 0.3) * 1000, 'result-text');
           app.aim = null; els.throwPad.classList.remove('on');
           break;
         }
@@ -991,7 +1042,9 @@
           break;
         case 'vtEnd':
           sound.whistle(true);
-          showBanner(`${e.winner === 0 ? 'あお' : 'あか'}の勝ち<small>ビクトリースロー ${vtTally()}</small>`, e.winner === 0 ? 'blue' : 'red', R.SET_OVER);
+          els.banner.hidden = true;
+          bigText([{ t: e.winner === 0 ? 'あおの勝ち!' : 'あかの勝ち!', cls: 'l1' }, { t: `ビクトリースロー ${vtTally()}`, cls: 'info' }],
+            e.winner === 0 ? 'blue' : 'red', (R.SET_OVER - 0.3) * 1000, 'result-text');
           break;
       }
     }
@@ -1008,17 +1061,39 @@
   function showResult() {
     const m = app.match;
     app.running = false;
-    els.resultTitle.textContent = m.winner === 0 ? '勝利!' : m.winner === 1 ? '負け…' : '引き分け';
-    els.resultTitle.style.color = m.winner === 0 ? 'var(--blue)' : m.winner === 1 ? 'var(--red)' : '';
+    const kind = m.winner === 0 ? 'win' : m.winner === 1 ? 'lose' : 'draw';
+    const title = kind === 'win' ? '勝利!' : kind === 'lose' ? '負け…' : '引き分け';
+    els.resultTitle.textContent = title;
+    els.resultTitle.dataset.t = title;
+    els.vResult.classList.remove('win', 'lose', 'draw');
+    els.vResult.classList.add(kind);
+    // あお n - n あか (取ったセットの数)
+    els.resultScore.innerHTML = `<div class="t blue">あお<b>${m.setWins[0]}</b></div><div class="vs">SET</div><div class="t red">あか<b>${m.setWins[1]}</b></div>`;
+    const ICON = { flag: '🚩', allout: '❄️', time: '⏱', over: '⚠️' };
     const rows = m.setResults.map((r, i) => {
       const who = r.winner === 0 ? 'あお' : r.winner === 1 ? 'あか' : '引き分け';
-      return `<li class="w${r.winner}">SET ${i + 1}: ${who} ・ ${REASON[r.reason]} <b>${r.points[0]} - ${r.points[1]}</b></li>`;
+      return `<li class="w${r.winner}"><span class="no">SET ${i + 1}</span><span class="why">${ICON[r.reason] || ''} ${who} ・ ${REASON[r.reason]}</span><b class="pts">${r.points[0]} - ${r.points[1]}</b></li>`;
     });
     rows.push(`<li class="total">セット ${m.setWins[0]} - ${m.setWins[1]} ・ ポイント ${m.points[0]} - ${m.points[1]}</li>`);
     if (m.vt) rows.push(`<li class="total">ビクトリースロー ${vtTally()}</li>`);
     if (m.decidedBy) rows.push(`<li class="by">${DECIDED[m.decidedBy]}で決着</li>`);
     els.resultSets.innerHTML = rows.join('');
     els.vResult.hidden = false;
+    // 勝ったら紙吹雪 (チームの色と金)。負けたら雪だけが降る
+    const cf = els.confetti; cf.innerHTML = '';
+    const cols = kind === 'win' ? ['#2f6fe0', '#ffd34d', '#ffffff', '#5cc8ff', '#ff8a4c'] : ['#ffffff'];
+    const n = kind === 'win' ? 46 : 22;
+    for (let i = 0; i < n; i++) {
+      const el = document.createElement('i');
+      el.style.left = (Math.random() * 100) + '%';
+      el.style.background = cols[i % cols.length];
+      if (kind !== 'win') { el.style.width = el.style.height = (3 + Math.random() * 4) + 'px'; el.style.borderRadius = '50%'; }
+      el.style.setProperty('--dx', ((Math.random() - 0.5) * 160) + 'px');
+      el.style.setProperty('--rot', (kind === 'win' ? 360 + Math.random() * 720 : 0) + 'deg');
+      el.style.animationDuration = (2.4 + Math.random() * 2.6) + 's';
+      el.style.animationDelay = (Math.random() * 1.6) + 's';
+      cf.appendChild(el);
+    }
     if (m.winner === 0) sound.win();
   }
 
@@ -1034,6 +1109,67 @@
     const p = camSubject();
     const target = camTarget(p);
     camPos.copy(target.pos); camLook.copy(target.look);
+  }
+
+  /**
+   * 寄りを重ねる。pos と look を書き換える。
+   * - 構え: 投げるを押さえている間 (かんたんは 0.15 秒より長く押さえたとき)、狙う相手の方へ寄る。なめらかに出入りする
+   * - 当てた瞬間: 当てた所へ寄って、0.75 秒で戻る (時間は実時間で進める。スローの間も同じ速さ)
+   */
+  function composeCam(dt, pos, look) {
+    // タイトルの後ろ: コートのまわりをゆっくり回る (1 周 60 秒)
+    if (!els.vTitle.hidden) {
+      app.orbitT = (app.orbitT || 0) + dt;
+      const a = app.orbitT * Math.PI * 2 / 60 + 0.3;
+      pos.set(Math.sin(a) * 24, 10, Math.cos(a) * 24);
+      look.set(0, 0.5, 0);
+      return;
+    }
+    const m = app.match, p = me();
+    const lockQ = app.lock && app.lock.target != null && m ? m.players[app.lock.target] : null;
+    const wantAim = !!(app.aim && !app.aimCancel && m && m.phase === 'play' && p && p.alive && lockQ && lockQ.alive &&
+      (m.aimMode === 'hard' || performance.now() - (app.aim.t0 || 0) > AIM_CAM.holdMs));
+    app.aimZoom = lerpN(app.aimZoom || 0, wantAim ? 1 : 0, dt * AIM_CAM.rate);
+    if (wantAim) app.aimCamQ = { x: lockQ.x, z: lockQ.z, px: p.x, pz: p.z };
+    const aq = app.aimCamQ;
+    if (app.aimZoom > 0.002 && aq) {
+      const w = app.aimZoom * app.aimZoom * (3 - 2 * app.aimZoom);     // なめらかに
+      let dx = aq.x - aq.px, dz = aq.z - aq.pz;
+      const d = Math.hypot(dx, dz) || 1; dx /= d; dz /= d;
+      pos.lerp(new T.Vector3(aq.px - dx * AIM_CAM.back, AIM_CAM.up, aq.pz - dz * AIM_CAM.back), w);
+      look.lerp(new T.Vector3(aq.px + (aq.x - aq.px) * AIM_CAM.look, 0.9, aq.pz + (aq.z - aq.pz) * AIM_CAM.look), w);
+    }
+    const hc = app.hitCam;
+    if (hc) {
+      hc.t += dt;
+      const t = hc.t, T0 = 0.12, T1 = 0.45;
+      const w = (t < T0 ? t / T0 : t < T1 ? 1 : Math.max(0, 1 - (t - T1) / (HIT_CAM.time - T1))) * HIT_CAM.amount;
+      let vx = pos.x - hc.x, vz = pos.z - hc.z;
+      const vl = Math.hypot(vx, vz) || 1; vx /= vl; vz /= vl;
+      pos.lerp(new T.Vector3(hc.x + vx * HIT_CAM.dist, HIT_CAM.up, hc.z + vz * HIT_CAM.dist), w);
+      look.lerp(new T.Vector3(hc.x, 0.9, hc.z), w);
+      app.hitCamW = w;
+      if (t >= HIT_CAM.time) { app.hitCam = null; app.hitCamW = 0; }
+    }
+  }
+
+  /** カメラから見て、その選手が壁に隠れているか (カメラ → 体の真ん中 の線が壁の箱を通るか) */
+  function hiddenByWall(p) {
+    const cx = camera.position.x, cy = camera.position.y, cz = camera.position.z;
+    const tx = p.x, ty = C.playerHeight(p) * 0.55, tz = p.z;
+    for (const s of C.SHELTERS) {
+      let t0 = 0, t1 = 1, ok = true;
+      for (const [a, b, lo, hi] of [[cx, tx, s.x - s.w / 2, s.x + s.w / 2], [cy, ty, 0, s.h], [cz, tz, s.z - s.d / 2, s.z + s.d / 2]]) {
+        const d = b - a;
+        if (Math.abs(d) < 1e-9) { if (a < lo || a > hi) { ok = false; break; } continue; }
+        let u = (lo - a) / d, v = (hi - a) / d;
+        if (u > v) { const w = u; u = v; v = w; }
+        t0 = Math.max(t0, u); t1 = Math.min(t1, v);
+        if (t0 > t1) { ok = false; break; }
+      }
+      if (ok && t1 < 0.999) return true;
+    }
+    return false;
   }
 
   function camTarget(p) {
@@ -1118,9 +1254,12 @@
         if (v.spr) {
           const sm = v.spr.mesh;
           sm.visible = true;
-          sm.material.opacity = 1;
-          sm.material.depthTest = true;
-          sm.renderOrder = 3;
+          // 低いカメラでは壁に隠れやすい。自分と、狙っている相手だけは、壁に隠れたら透けて見せる
+          const xray = (p.id === m.human || (app.lock && app.lock.target === p.id)) && hiddenByWall(p);
+          sm.material.opacity = xray ? 0.6 : 1;
+          sm.material.depthTest = !xray;
+          sm.renderOrder = xray ? 5 : 3;
+          v.xray = xray;
           // 縦に伸ばす量は、その選手をカメラから見下ろす角度で決める。
           // 画面の上 (遠く) の選手ほど浅く見るので、決まった角度で伸ばすと遠くの選手が縦長になっていた (縦÷横 1.35)
           {
@@ -1184,7 +1323,10 @@
     stepPuffs(dt);
     updateAim();
 
+    // 追いかけるカメラ (camPos/camLook) に、構えたときと当てたときの寄りを重ねる
     camera.position.copy(camPos);
+    const look = camLook.clone();
+    composeCam(dt, camera.position, look);
     if (app.shake > 0) {
       app.shake -= dt;
       camera.position.x += (Math.random() - 0.5) * app.shake * 0.6;
@@ -1197,7 +1339,7 @@
       camera.position.x += Math.sin(t * 95) * a;
       camera.position.y += Math.cos(t * 77) * a * 0.7;
     }
-    camera.lookAt(camLook);
+    camera.lookAt(look);
     updateFans(performance.now() / 1000, Math.min(0.05, (performance.now() - (updateFans.last || performance.now())) / 1000)); updateFans.last = performance.now();
     renderer.render(scene, camera);
   }
@@ -1301,6 +1443,10 @@
     let bh = '';
     for (let i = 0; i < R.MAX_CARRY; i++) bh += `<i class="${i < balls ? '' : 'none'}"></i>`;
     setHTML('mb', els.myBalls, bh);
+    // 必殺ゲージ (当てると貯まる。満タンなら次の 1 球が大玉)
+    const sp = app.match ? app.match.sp[0] : 0;
+    const spq = Math.round(sp * 12) / 12;
+    if (app.hud.sp !== spq) { app.hud.sp = spq; els.spGauge.style.setProperty('--sp', spq); els.throwPad.classList.toggle('super', sp >= 1); els.padLabel.textContent = sp >= 1 ? '大玉!' : '投げる'; }
     const empty = balls === 0;
     if (app.hud.empty !== empty) { app.hud.empty = empty; els.throwPad.classList.toggle('empty', empty); }
     // 丸めている進み具合 (12段階に丸める。細かく書き換えると遅い端末でカクつく)
@@ -1343,7 +1489,8 @@
       while (app.acc >= h && n < 4) {
         const inp = {
           mx: app.input.mx, mz: app.input.mz, crouch: app.input.crouch,
-          aiming: !!app.aim && app.match.phase === 'play',   // 投げるを押さえている間は構える (立つ)
+          aiming: !!app.aim && !app.aimCancel && app.match.phase === 'play',   // 投げるを押さえている間は構える (立つ)。取り消しの位置では構えない
+          aimTarget: app.lock && app.aim ? app.lock.target : null,
           throwAt: app.input.throwAt
         };
         app.input.throwAt = null;
@@ -1416,6 +1563,21 @@
     document.addEventListener('visibilitychange', () => { if (document.hidden) pause(true); });
     window.addEventListener('resize', resize);
 
+    // タイトルに降る雪 (CSS で transform だけを動かす)
+    if (els.snow) {
+      for (let i = 0; i < 34; i++) {
+        const f = document.createElement('i');
+        const r = 2 + Math.random() * 4;
+        f.style.width = f.style.height = r + 'px';
+        f.style.left = (Math.random() * 100) + '%';
+        f.style.opacity = (0.4 + Math.random() * 0.5).toFixed(2);
+        f.style.setProperty('--dx', ((Math.random() - 0.5) * 120) + 'px');
+        f.style.animationDuration = (6 + Math.random() * 8) + 's';
+        f.style.animationDelay = (-Math.random() * 14) + 's';
+        els.snow.appendChild(f);
+      }
+    }
+
     // タイトルの後ろでは、全員 AI の試合を流しておく
     app.match = C.createMatch({ seed: 7, human: null, skill: [0.55, 0.55] });
     resetPlayers();
@@ -1460,6 +1622,9 @@
       scene: () => scene,
       sound: (name, arg) => sound.measure(name, arg),
       hitShake: () => app.hitShake,
+      camInfo: () => ({ aimZoom: app.aimZoom || 0, hitCam: app.hitCamW || 0, pos: camera.position.toArray().map((v) => +v.toFixed(2)) }),
+      xray: (id) => !!(views.players[id] && views.players[id].xray),
+      cancelState: () => ({ cancel: !!app.aimCancel, cls: els.throwPad.classList.contains('cancel') }),
       sprites: () => ({ ready: !!sprites.tex, failed: sprites.failed }),
       hudBottom: () => app.hudBottom,
       textures: () => ({ loaded: app.tex.loaded, failed: app.tex.failed, names: app.tex.names.slice() }),

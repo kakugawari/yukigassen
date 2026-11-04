@@ -116,6 +116,17 @@ async function run() {
     }));
     ok(fit.wide <= 1, '横スクロールが出ない');
     ok(fit.title.includes('雪合戦'), `タイトルが出ている (${fit.title})`);
+    // タイトルの見た目: 題字が画面の幅に収まる・雪が降る・後ろのカメラがコートのまわりを回る
+    const look = await phone.evaluate(async () => {
+      const r = document.querySelector('h1 b').getBoundingClientRect();
+      const p0 = window.__app.camInfo().pos;
+      await new Promise((res) => setTimeout(res, 1500));
+      const p1 = window.__app.camInfo().pos;
+      return { l: Math.round(r.left), r: Math.round(r.right), snow: document.querySelectorAll('#vTitle .snow i').length, moved: Math.hypot(p1[0] - p0[0], p1[2] - p0[2]) };
+    });
+    ok(look.l >= 0 && look.r <= 430, `題字「フラッグ7」が画面の幅に収まる (${look.l}〜${look.r})`);
+    ok(look.snow >= 20, `タイトルに雪が降る (${look.snow} 粒)`);
+    ok(look.moved > 0.2, `タイトルの後ろでカメラがコートのまわりを回る (1.5 秒で ${look.moved.toFixed(2)}m)`);
     // ホーム画面のアイコン: iOS は SVG を使えないので PNG (180x180)。読めて、大きさが合っている
     const icon = await phone.evaluate(async () => {
       const l = document.querySelector('link[rel="apple-touch-icon"]');
@@ -627,6 +638,15 @@ async function run() {
     await phone.waitForFunction(() => !document.getElementById('vResult').hidden, null, { timeout: 10000 });
     const res = await phone.evaluate(() => ({ t: document.getElementById('resultTitle').textContent, n: document.querySelectorAll('#resultSets li').length }));
     ok(res.t.includes('勝利'), `2 セット取ると試合終了の画面 (${res.t}, ${res.n} 行)`);
+    const look2 = await phone.evaluate(() => {
+      const v = document.getElementById('vResult'), t = document.getElementById('resultTitle');
+      const r = t.getBoundingClientRect();
+      return { win: v.classList.contains('win'), rays: getComputedStyle(document.querySelector('#vResult .rays')).display, confetti: document.querySelectorAll('#confetti i').length,
+        dataT: t.dataset.t, text: t.textContent, score: document.getElementById('resultScore').textContent.replace(/\s+/g, ''), inside: r.left >= 0 && r.right <= 430 };
+    });
+    ok(look2.win && look2.rays === 'block' && look2.confetti >= 30, `勝つと光の筋と紙吹雪 (紙吹雪 ${look2.confetti})`);
+    ok(look2.dataT === look2.text && look2.inside, `「勝利!」の縁取りが字と同じで、画面に収まる (${look2.dataT})`);
+    ok(/あお2.*あか0/.test(look2.score), `取ったセットの数が大きく出る (${look2.score})`);
     const totals = await phone.evaluate(() => document.getElementById('resultSets').textContent);
     ok(/ポイント \d+ - \d+/.test(totals) && totals.includes('セット数で決着'), `結果にポイント合計と決め手が出る`);
     await phone.click('#btnAgain');

@@ -63,14 +63,17 @@
 
   <!-- タイトル -->
   <section class="screen" id="vTitle">
+    <div class="snow" aria-hidden="true"></div>
     <div class="title-card">
-      <h1><span>雪合戦</span><b>フラッグ7</b></h1>
-      <p class="tag">7対7 ・ 2セット先取 ・ 当たったら退場</p>
-      <div class="diff" role="group" aria-label="投げ方">
-        <button type="button" data-mode="easy" class="on">かんたん<small>押すとすぐ投げる・玉が追う</small></button>
-        <button type="button" data-mode="hard">むずかしい<small>押さえて構え、離して投げる</small></button>
+      <div class="logo">
+        <h1><span>雪合戦</span><b data-t="フラッグ">フラッグ<em data-t="7">7</em></b></h1>
+        <p class="tag">7対7 ・ 2セット先取 ・ 当たったら退場</p>
       </div>
-      <button type="button" class="btn-start" id="btnStart">試合開始</button>
+      <div class="diff" role="group" aria-label="投げ方">
+        <button type="button" data-mode="easy" class="on"><i class="ico">⚡</i>かんたん<small>押すとすぐ投げる・玉が追う</small></button>
+        <button type="button" data-mode="hard"><i class="ico">🎯</i>むずかしい<small>押さえて構え、離して投げる</small></button>
+      </div>
+      <button type="button" class="btn-start" id="btnStart"><span>試合開始</span></button>
       <details class="rules">
         <summary>あそびかた・ルール</summary>
         <ul>
@@ -100,10 +103,13 @@
 
   <!-- 試合結果 -->
   <section class="screen" id="vResult" hidden>
-    <div class="card">
-      <h2 id="resultTitle">勝利!</h2>
+    <div class="rays" aria-hidden="true"></div>
+    <div class="confetti" id="confetti" aria-hidden="true"></div>
+    <div class="card result-card">
+      <h2 id="resultTitle" class="result-title" data-t="勝利!">勝利!</h2>
+      <div class="scoreline" id="resultScore"></div>
       <ol class="sets-list" id="resultSets"></ol>
-      <button type="button" class="btn-start" id="btnAgain">もう一度</button>
+      <button type="button" class="btn-start" id="btnAgain"><span>もう一度</span></button>
       <button type="button" class="btn-sub" id="btnToTitle">タイトルへ</button>
     </div>
   </section>

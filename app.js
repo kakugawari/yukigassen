@@ -7,7 +7,7 @@
   const C = window.Core;
   const R = C.R;
   const T = window.THREE;
-  const VERSION = 'v15';
+  const VERSION = 'v16';
   const AI_SKILL = 0.5;      // 相手の強さ (前の「ふつう」)。強さのえらびはやめ、投げ方をえらぶ
   const AUTO_CROUCH = 0.2;
   const CANCEL = { out: 40, back: 18 };   // 投げるボタン: 40px 以上引っぱってから 18px 以内へ戻して離すと取り消し   // 止まってからしゃがむまで (秒)
@@ -28,6 +28,7 @@
     setNo: $('setNo'), time: $('time'), stockBlue: $('stockBlue'), stockRed: $('stockRed'),
     ptsBlue: $('ptsBlue'), ptsRed: $('ptsRed'), inEnemy: $('inEnemy'), warn: $('warn'),
     stickZone: $('stickZone'), stick: $('stick'), knob: $('knob'), moveHint: $('moveHint'),
+    resultScore: $('resultScore'), confetti: $('confetti'), snow: document.querySelector('#vTitle .snow'),
     makeRing: $('makeRing'), throwPad: $('throwPad'), myBalls: $('myBalls'), pops: $('pops'), spGauge: $('spGauge'), padLabel: $('padLabel'),
     markLock: $('markLock'), markFlag: $('markFlag'), markFlagText: $('markFlagText'), score: document.querySelector('.score'),
     banner: $('banner'),
@@ -1060,17 +1061,39 @@
   function showResult() {
     const m = app.match;
     app.running = false;
-    els.resultTitle.textContent = m.winner === 0 ? '勝利!' : m.winner === 1 ? '負け…' : '引き分け';
-    els.resultTitle.style.color = m.winner === 0 ? 'var(--blue)' : m.winner === 1 ? 'var(--red)' : '';
+    const kind = m.winner === 0 ? 'win' : m.winner === 1 ? 'lose' : 'draw';
+    const title = kind === 'win' ? '勝利!' : kind === 'lose' ? '負け…' : '引き分け';
+    els.resultTitle.textContent = title;
+    els.resultTitle.dataset.t = title;
+    els.vResult.classList.remove('win', 'lose', 'draw');
+    els.vResult.classList.add(kind);
+    // あお n - n あか (取ったセットの数)
+    els.resultScore.innerHTML = `<div class="t blue">あお<b>${m.setWins[0]}</b></div><div class="vs">SET</div><div class="t red">あか<b>${m.setWins[1]}</b></div>`;
+    const ICON = { flag: '🚩', allout: '❄️', time: '⏱', over: '⚠️' };
     const rows = m.setResults.map((r, i) => {
       const who = r.winner === 0 ? 'あお' : r.winner === 1 ? 'あか' : '引き分け';
-      return `<li class="w${r.winner}">SET ${i + 1}: ${who} ・ ${REASON[r.reason]} <b>${r.points[0]} - ${r.points[1]}</b></li>`;
+      return `<li class="w${r.winner}"><span class="no">SET ${i + 1}</span><span class="why">${ICON[r.reason] || ''} ${who} ・ ${REASON[r.reason]}</span><b class="pts">${r.points[0]} - ${r.points[1]}</b></li>`;
     });
     rows.push(`<li class="total">セット ${m.setWins[0]} - ${m.setWins[1]} ・ ポイント ${m.points[0]} - ${m.points[1]}</li>`);
     if (m.vt) rows.push(`<li class="total">ビクトリースロー ${vtTally()}</li>`);
     if (m.decidedBy) rows.push(`<li class="by">${DECIDED[m.decidedBy]}で決着</li>`);
     els.resultSets.innerHTML = rows.join('');
     els.vResult.hidden = false;
+    // 勝ったら紙吹雪 (チームの色と金)。負けたら雪だけが降る
+    const cf = els.confetti; cf.innerHTML = '';
+    const cols = kind === 'win' ? ['#2f6fe0', '#ffd34d', '#ffffff', '#5cc8ff', '#ff8a4c'] : ['#ffffff'];
+    const n = kind === 'win' ? 46 : 22;
+    for (let i = 0; i < n; i++) {
+      const el = document.createElement('i');
+      el.style.left = (Math.random() * 100) + '%';
+      el.style.background = cols[i % cols.length];
+      if (kind !== 'win') { el.style.width = el.style.height = (3 + Math.random() * 4) + 'px'; el.style.borderRadius = '50%'; }
+      el.style.setProperty('--dx', ((Math.random() - 0.5) * 160) + 'px');
+      el.style.setProperty('--rot', (kind === 'win' ? 360 + Math.random() * 720 : 0) + 'deg');
+      el.style.animationDuration = (2.4 + Math.random() * 2.6) + 's';
+      el.style.animationDelay = (Math.random() * 1.6) + 's';
+      cf.appendChild(el);
+    }
     if (m.winner === 0) sound.win();
   }
 
@@ -1094,6 +1117,14 @@
    * - 当てた瞬間: 当てた所へ寄って、0.75 秒で戻る (時間は実時間で進める。スローの間も同じ速さ)
    */
   function composeCam(dt, pos, look) {
+    // タイトルの後ろ: コートのまわりをゆっくり回る (1 周 60 秒)
+    if (!els.vTitle.hidden) {
+      app.orbitT = (app.orbitT || 0) + dt;
+      const a = app.orbitT * Math.PI * 2 / 60 + 0.3;
+      pos.set(Math.sin(a) * 24, 10, Math.cos(a) * 24);
+      look.set(0, 0.5, 0);
+      return;
+    }
     const m = app.match, p = me();
     const lockQ = app.lock && app.lock.target != null && m ? m.players[app.lock.target] : null;
     const wantAim = !!(app.aim && !app.aimCancel && m && m.phase === 'play' && p && p.alive && lockQ && lockQ.alive &&
@@ -1531,6 +1562,21 @@
     els.btnToTitle.addEventListener('click', toTitle);
     document.addEventListener('visibilitychange', () => { if (document.hidden) pause(true); });
     window.addEventListener('resize', resize);
+
+    // タイトルに降る雪 (CSS で transform だけを動かす)
+    if (els.snow) {
+      for (let i = 0; i < 34; i++) {
+        const f = document.createElement('i');
+        const r = 2 + Math.random() * 4;
+        f.style.width = f.style.height = r + 'px';
+        f.style.left = (Math.random() * 100) + '%';
+        f.style.opacity = (0.4 + Math.random() * 0.5).toFixed(2);
+        f.style.setProperty('--dx', ((Math.random() - 0.5) * 120) + 'px');
+        f.style.animationDuration = (6 + Math.random() * 8) + 's';
+        f.style.animationDelay = (-Math.random() * 14) + 's';
+        els.snow.appendChild(f);
+      }
+    }
 
     // タイトルの後ろでは、全員 AI の試合を流しておく
     app.match = C.createMatch({ seed: 7, human: null, skill: [0.55, 0.55] });

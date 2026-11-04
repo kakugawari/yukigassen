@@ -788,3 +788,159 @@ test('地面と壁の絵 (tex_*.jpg) がそろっていて、重すぎない', (
   for (const n of ['ground', 'court', 'walltop', 'flag_blue', 'flag_red']) assert.ok(src.includes(`tex_${n}.jpg`), `app.js が tex_${n}.jpg を読んでいない`);
   assert.ok(src.includes('tex_shelter_${') && src.includes('tex_chateau_${'), 'app.js がシェルター・シャトーの絵を読んでいない');
 });
+
+// ------------------------------------------------------------ バトルロイヤル
+/** バトルロイヤルを始め、keep 以外は脱落させておく (脱落した順にも入れる)。人は操作しない */
+function royale(keep, opt) {
+  const m = C.createMatch(Object.assign({ mode: 'royale', seed: 3, human: null }, opt || {}));
+  m.phase = 'play';
+  C.drainEvents(m);
+  for (const p of m.players) if (!keep.includes(p.id)) { p.alive = false; m.out.push(p.id); }
+  return m;
+}
+/** a が b へ投げ、玉が消えるまで進める (b は動かない)。起きたできごとを返す */
+function throwAt(m, a, b) {
+  const A = m.players[a], B = m.players[b];
+  A.balls = 3; A.cd = 0; A.standT = 0;
+  const ax = A.x, az = A.z, bx = B.x, bz = B.z;
+  C.throwBall(m, A, B.x, B.z, b);
+  const ev = [];
+  for (let i = 0; i < 240 && m.balls.length; i++) {
+    // AI どうしなので、動いたり投げ返したりしないように毎歩もとへ戻す
+    A.balls = B.balls = 0; A.makeT = B.makeT = 0;
+    C.step(m, 1 / 60, {});
+    ev.push(...C.drainEvents(m));
+    A.x = ax; A.z = az; B.x = bx; B.z = bz;
+  }
+  return ev;
+}
+
+test('バトルロイヤル: 8 人がばらばらのチーム・体力 3・広い正方形。チーム戦に戻すと壁と広さも戻る', () => {
+  const m = C.createMatch({ mode: 'royale', seed: 1, human: 0 });
+  assert.strictEqual(m.mode, 'royale');
+  assert.strictEqual(m.players.length, 8);
+  assert.strictEqual(new Set(m.players.map((p) => p.team)).size, 8);
+  assert.ok(m.players.every((p) => p.hp === 3 && Math.abs(p.x) < R.ROYALE.HALF && Math.abs(p.z) < R.ROYALE.HALF));
+  assert.strictEqual(m.setTime, 180);
+  assert.strictEqual(C.ARENA.hw, R.ROYALE.HALF);
+  const royaleWalls = C.SHELTERS.length;
+  assert.ok(royaleWalls > 7);
+  // 出発点はどれも壁の外
+  for (const p of m.players) assert.ok(!C.SHELTERS.some((s) => Math.abs(p.x - s.x) < s.w / 2 + R.PLAYER_R && Math.abs(p.z - s.z) < s.d / 2 + R.PLAYER_R), `選手 ${p.id} が壁の中`);
+  const t = C.createMatch({ seed: 1, human: 1 });
+  assert.strictEqual(t.mode, 'team');
+  assert.strictEqual(C.SHELTERS.length, 7);
+  assert.strictEqual(C.ARENA.hw, R.HALF_W);
+  // バトルロイヤルの試合を 1 歩進めると、また広い会場になる (2 つの試合をかわるがわる動かしても混ざらない)
+  C.step(m, 1 / 60, {});
+  assert.strictEqual(C.SHELTERS.length, royaleWalls);
+});
+
+test('バトルロイヤル: 3 回当たると脱落。当たった直後 1 秒は当たらない。倒した数と順位がつく', () => {
+  const m = royale([0, 1]);
+  const A = m.players[0], B = m.players[1];
+  A.x = -3; A.z = 3; B.x = -3; B.z = 7;
+  let ev = throwAt(m, 0, 1);
+  const hurt = ev.find((e) => e.type === 'hurt');
+  assert.ok(hurt, '1 回目は体力が減るだけ: ' + ev.map((e) => e.type).join(','));
+  assert.strictEqual(B.hp, 2);
+  assert.ok(B.alive && B.inv > 0);
+  // 無敵の間に当たった玉ははじかれる (体力は減らない)
+  B.inv = 1;
+  ev = throwAt(m, 0, 1);
+  assert.ok(ev.some((e) => e.type === 'block'));
+  assert.strictEqual(B.hp, 2);
+  B.inv = 0;
+  throwAt(m, 0, 1);
+  assert.strictEqual(B.hp, 1);
+  B.inv = 0;
+  ev = throwAt(m, 0, 1);
+  const out = ev.find((e) => e.type === 'hit');
+  assert.ok(out && out.royale && out.by === 0, '3 回目で脱落');
+  assert.strictEqual(B.alive, false);
+  assert.strictEqual(A.kills, 1);
+  assert.strictEqual(A.hits, 3);
+  // 残り 1 人で決着: 1 位は A、2 位は最後に脱落した B
+  const end = ev.concat(C.drainEvents(m)).find((e) => e.type === 'royaleEnd');
+  assert.ok(end, '残り 1 人で決着');
+  assert.strictEqual(m.winner, 0);
+  assert.strictEqual(m.ranking[0], 0);
+  assert.strictEqual(m.ranking[1], 1);
+  assert.strictEqual(B.place, 2);
+  assert.strictEqual(m.decidedBy, 'last');
+  for (let i = 0; i < 400 && m.phase !== 'matchOver'; i++) C.step(m, 1 / 60, {});
+  assert.strictEqual(m.phase, 'matchOver');
+});
+
+test('バトルロイヤル: 時間切れは、残った人の体力の多い順', () => {
+  const m = royale([2, 5, 6]);
+  m.players[2].hp = 1; m.players[5].hp = 3; m.players[6].hp = 2;
+  m.time = 0.01;
+  C.step(m, 1 / 60, {});
+  assert.strictEqual(m.decidedBy, 'time');
+  assert.deepStrictEqual(m.ranking.slice(0, 3), [5, 6, 2]);
+  assert.strictEqual(m.ranking.length, 8);
+  assert.strictEqual(new Set(m.ranking).size, 8);
+});
+
+test('バトルロイヤル: AI だけで 12 試合。必ず終わり、壁にめりこまず、会場から出ず、だれかは当てる', () => {
+  let outs = 0;
+  for (let s = 0; s < 12; s++) {
+    const m = C.createMatch({ mode: 'royale', seed: 100 + s, human: null });
+    let bad = 0;
+    for (let i = 0; i < 60 * 240 && m.phase !== 'matchOver'; i++) {
+      C.step(m, 1 / 60, {});
+      C.drainEvents(m);
+      if ((i & 15) === 0) {
+        for (const p of m.players) {
+          if (!p.alive) continue;
+          if (Math.abs(p.x) > R.ROYALE.HALF + 0.01 || Math.abs(p.z) > R.ROYALE.HALF + 0.01) bad++;
+          if (C.SHELTERS.some((w) => Math.abs(p.x - w.x) < w.w / 2 - 0.05 && Math.abs(p.z - w.z) < w.d / 2 - 0.05)) bad++;
+        }
+      }
+    }
+    assert.strictEqual(m.phase, 'matchOver', `seed ${100 + s} が終わらない`);
+    assert.strictEqual(bad, 0, `seed ${100 + s}: 壁の中か会場の外 ${bad}`);
+    outs += m.out.length;
+  }
+  assert.ok(outs >= 12 * 3, `脱落が少なすぎる (${outs})`);
+});
+
+test('バトルロイヤル: 残り 2 人で決戦。会場が縮んで、2 人とも真ん中の 8m 四方に入る。時間は 30 秒は残る', () => {
+  const m = royale([0, 5]);
+  const A = m.players[0], B = m.players[5];
+  A.x = -13; A.z = 13; B.x = 13; B.z = -12;
+  m.time = 5;
+  C.step(m, 1 / 60, {});
+  const ev = C.drainEvents(m);
+  assert.ok(ev.some((e) => e.type === 'final'), '決戦のできごと');
+  assert.ok(m.final && m.time >= 29.9, `時間は 30 秒残る (${m.time.toFixed(1)})`);
+  for (let i = 0; i < 60 * (R.ROYALE.FINAL_SHRINK + 0.5); i++) { C.step(m, 1 / 60, {}); C.drainEvents(m); }
+  assert.ok(Math.abs(C.ARENA.hw - R.ROYALE.FINAL_HALF) < 1e-6, `会場が縮む (${C.ARENA.hw})`);
+  for (const p of [A, B]) if (p.alive) assert.ok(Math.abs(p.x) <= R.ROYALE.FINAL_HALF && Math.abs(p.z) <= R.ROYALE.FINAL_HALF, `選手 ${p.id} が真ん中に入る (${p.x.toFixed(1)}, ${p.z.toFixed(1)})`);
+  // 決戦が 1 回だけ
+  assert.ok(!C.drainEvents(m).some((e) => e.type === 'final'));
+});
+
+test('バトルロイヤル: AI だけで 12 試合。決戦になったら、2 人とも縮んだ会場の中で、壁にめりこまない', () => {
+  let finals = 0;
+  for (let s = 0; s < 12; s++) {
+    const m = C.createMatch({ mode: 'royale', seed: 300 + s, human: null });
+    let bad = 0;
+    for (let i = 0; i < 60 * 240 && m.phase !== 'matchOver'; i++) {
+      C.step(m, 1 / 60, {});
+      C.drainEvents(m);
+      if (m.final && m.final.t > R.ROYALE.FINAL_SHRINK && (i & 7) === 0) {
+        for (const p of m.players) {
+          if (!p.alive) continue;
+          if (Math.abs(p.x) > R.ROYALE.FINAL_HALF + 0.01 || Math.abs(p.z) > R.ROYALE.FINAL_HALF + 0.01) bad++;
+          if (C.SHELTERS.some((w) => Math.abs(p.x - w.x) < w.w / 2 - 0.05 && Math.abs(p.z - w.z) < w.d / 2 - 0.05)) bad++;
+        }
+      }
+    }
+    if (m.final) finals++;
+    assert.strictEqual(m.phase, 'matchOver');
+    assert.strictEqual(bad, 0, `seed ${300 + s}`);
+  }
+  assert.ok(finals >= 3, `決戦になった試合 ${finals}/12`);
+});

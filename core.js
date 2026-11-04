@@ -61,6 +61,10 @@
     SETS: 3,
     COUNTDOWN: 2.0,
     SET_OVER: 3.0,
+    // バトルロイヤル (公式に無い別のモード): 8 人全員が敵。30m 四方。3 分。3 回当たると脱落
+    ROYALE: { N: 8, HALF: 15, TIME: 180, HP: 3, INV: 1.0, SPAWN_R: 13.2,
+      // 決戦 (残り 2 人): 会場が FINAL_HALF 四方まで FINAL_SHRINK 秒で縮み、真ん中へ寄せる。残り時間は少なくとも FINAL_TIME 秒にする
+      FINAL_HALF: 8, FINAL_SHRINK: 6, FINAL_TIME: 30 },
     FORWARDS: 4,
     BACKS: 3
   };
@@ -104,7 +108,45 @@
     }
     return list;
   }
-  const SHELTERS = makeShelters();
+  /**
+   * バトルロイヤルの会場: 真ん中に大きな壁、そのまわりに 2 重の壁。向きを縦・横まぜる。
+   * 開始の位置 (半径 13.2 の円の上、22.5° ずつずらした 8 か所) には壁を置かない
+   */
+  function makeRoyaleShelters() {
+    const L = [{ x: 0, z: 0, w: 3.9, d: 1.35, h: 1.3, kind: 'chateau', team: -1 }];
+    const sh = (x, z, along) => L.push(along === 'z'
+      ? { x, z, w: 0.68, d: 1.95, h: 1.2, kind: 'shelter', team: -1 }
+      : { x, z, w: 1.95, d: 0.68, h: 1.2, kind: 'shelter', team: -1 });
+    const long = (x, z, along) => L.push(along === 'z'
+      ? { x, z, w: 0.68, d: 2.7, h: 1.2, kind: 'center', team: -1 }
+      : { x, z, w: 2.7, d: 0.68, h: 1.2, kind: 'center', team: -1 });
+    long(6.5, 0, 'z'); long(-6.5, 0, 'z'); long(0, 6.5, 'x'); long(0, -6.5, 'x');
+    sh(5, 5, 'x'); sh(-5, -5, 'x'); sh(-5, 5, 'z'); sh(5, -5, 'z');
+    for (const sx of [1, -1]) for (const sz of [1, -1]) { sh(sx * 10.5, sz * 3.2, 'z'); sh(sx * 3.2, sz * 10.5, 'x'); }
+    return L;
+  }
+  const TEAM_SHELTERS = makeShelters();
+  const ROYALE_SHELTERS = makeRoyaleShelters();
+  // いま使っている会場。中身を入れ替えて使う (ほかの関数は SHELTERS と ARENA を見る)
+  const SHELTERS = TEAM_SHELTERS.slice();
+  const ARENA = { mode: 'team', hw: R.HALF_W, hl: R.HALF_L };
+  function useArena(m) {
+    const mode = m && m.mode === 'royale' ? 'royale' : 'team';
+    if (mode === 'royale') ARENA.hw = ARENA.hl = royaleHalf(m);
+    if (ARENA.mode === mode) return;
+    ARENA.mode = mode;
+    SHELTERS.length = 0;
+    SHELTERS.push(...(mode === 'royale' ? ROYALE_SHELTERS : TEAM_SHELTERS));
+    ARENA.hw = mode === 'royale' ? royaleHalf(m) : R.HALF_W;
+    ARENA.hl = mode === 'royale' ? royaleHalf(m) : R.HALF_L;
+  }
+  /** バトルロイヤルの会場の半分の広さ。決戦が始まると、なめらかに縮む */
+  function royaleHalf(m) {
+    const f = m && m.final;
+    if (!f) return R.ROYALE.HALF;
+    const k = Math.min(1, f.t / R.ROYALE.FINAL_SHRINK), e = k * k * (3 - 2 * k);
+    return R.ROYALE.HALF + (R.ROYALE.FINAL_HALF - R.ROYALE.HALF) * e;
+  }
 
   function flagPos(team) { return { x: 0, z: side(team) * R.FLAG_U }; }
 
@@ -160,8 +202,44 @@
       winner: null
     };
     m.rng = mulberry32(m.seed);
+    if (opt.mode === 'royale') {
+      const N = R.ROYALE.N;
+      m.mode = 'royale';
+      m.setTime = opt.setTime || R.ROYALE.TIME;
+      m.skill = new Array(N).fill(opt.aiSkill == null ? 0.5 : opt.aiSkill);
+      m.stock = new Array(N).fill(1e9);     // 雪玉はチームで 90 個ではなく、ひとりずつ (いくらでも丸められる。持てるのは 3 個)
+      m.sp = new Array(N).fill(0);
+      m.human = opt.human === undefined ? 0 : opt.human;
+      useArena(m);
+      startRoyale(m);
+      return m;
+    }
+    m.mode = 'team';
+    useArena(m);
     startSet(m);
     return m;
+  }
+
+  /** バトルロイヤルを始める: 8 人を円の上に並べ、全員が真ん中を向く。1 回きり (セットは無い) */
+  function startRoyale(m) {
+    const N = R.ROYALE.N;
+    m.setNo = 1;
+    m.phase = 'countdown';
+    m.phaseTime = R.COUNTDOWN;
+    m.time = m.setTime;
+    m.balls = [];
+    m.players = [];
+    m.out = [];          // 脱落した順
+    m.final = null;      // 決戦 (残り 2 人) が始まったら { t: 経った秒, ids }
+    for (let i = 0; i < N; i++) {
+      const a = (i + 0.5) / N * Math.PI * 2;
+      const p = newPlayer(i, i, 'F', i + 1, Math.sin(a) * R.ROYALE.SPAWN_R, Math.cos(a) * R.ROYALE.SPAWN_R);
+      p.face = Math.atan2(-p.x, -p.z);
+      p.hp = R.ROYALE.HP;
+      m.players.push(p);
+    }
+    m.humanBase = m.human;
+    m.events.push({ type: 'setStart', setNo: 1, royale: true });
   }
 
   function startSet(m) {
@@ -195,6 +273,7 @@
       crouch: false, standT: 0,
       balls: R.START_CARRY, makeT: 0, cd: 0,
       aimF: 0,                      // 構え (0..1)。人が投げるボタンを押さえている間だけ増える
+      hp: 1, inv: 0, kills: 0, hits: 0,   // バトルロイヤル: 体力 (3)・当たった直後の無敵 (秒)・倒した数・当てた数
       ai: { think: 0, goal: null, spot: -1, holdT: 0, dodgeT: 0, dx: 0, dz: 0, seen: {}, rush: false }
     };
   }
@@ -282,7 +361,7 @@
   function ballCollide(b, players) {
     // 大玉 (b.r) が大きいのは人への当たりだけ。地面と壁はふつうの玉と同じ (狙いの見積もりとずれないように)
     const br = b.r || R.BALL_R, wr = R.BALL_R;
-    if (Math.abs(b.x) > R.HALF_W + 3 || Math.abs(b.z) > R.HALF_L + 4) return { kind: 'out' };
+    if (Math.abs(b.x) > ARENA.hw + 3 || Math.abs(b.z) > ARENA.hl + 4) return { kind: 'out' };
     if (b.y <= wr) return { kind: 'ground' };
     for (let i = 0; i < SHELTERS.length; i++) {
       const s = SHELTERS[i];
@@ -362,9 +441,34 @@
       if (!q.alive || q.team === b.team) continue;
       if (Math.hypot(q.x - b.x, q.z - b.z) > R.SPLASH_R) continue;
       if (segBlocked(b.x, b.z, q.x, q.z)) continue;
+      if (m.mode === 'royale') { hurtRoyale(m, q, b, { x: q.x, y: 1, z: q.z, vx: q.x - b.x, vz: q.z - b.z, splash: true }); continue; }
       q.alive = false; q.outAt = m.time;
       m.events.push({ type: 'hit', player: q.id, by: b.owner, x: q.x, y: 1, z: q.z, vx: q.x - b.x, vz: q.z - b.z, big: true, splash: true });
     }
+  }
+
+  /**
+   * バトルロイヤル: 1 発ではアウトにならない。体力 3 を 1 つ減らし、少しのあいだ無敵 (囲まれて一度に削られないように)。
+   * 無敵の間に当たった玉は、受け止めたことにする (玉は消える)。0 になったら脱落
+   */
+  function hurtRoyale(m, p, b, at) {
+    if (p.inv > 0) { m.events.push({ type: 'block', player: p.id, x: at.x, y: at.y, z: at.z }); return false; }
+    const owner = m.players[b.owner];
+    p.hp -= 1;
+    p.inv = R.ROYALE.INV;
+    if (owner) owner.hits++;
+    if (b.human && !b.big) m.sp[b.team] = Math.min(1, m.sp[b.team] + R.SP_PER_HIT);
+    if (p.hp > 0) {
+      m.events.push(Object.assign({ type: 'hurt', player: p.id, hp: p.hp, by: b.owner, big: !!b.big }, at));
+      return true;
+    }
+    p.alive = false;
+    p.outAt = m.time;
+    m.out.push(p.id);
+    p.place = m.players.filter((q) => q.alive).length + 1;
+    if (owner) owner.kills++;
+    m.events.push(Object.assign({ type: 'hit', player: p.id, by: b.owner, big: !!b.big, royale: true, place: p.place }, at));
+    return true;
   }
 
   function stepBalls(m, dt) {
@@ -382,7 +486,9 @@
       }
       b.age += dt;
       if (!hit) { keep.push(b); continue; }
-      if (hit.kind === 'player') {
+      if (hit.kind === 'player' && m.mode === 'royale') {
+        hurtRoyale(m, hit.player, b, { x: b.x, y: b.y, z: b.z, vx: b.vx, vz: b.vz });
+      } else if (hit.kind === 'player') {
         const p = hit.player;
         p.alive = false;
         p.outAt = m.time;
@@ -424,6 +530,10 @@
    * バックスはコート全体 (ただし相手コートに入れるのは全体で 3 人まで。これは反則として別に見る)。
    */
   function limits(p) {
+    if (ARENA.mode === 'royale') {
+      const h = ARENA.hw - R.PLAYER_R;
+      return { xmin: -h, xmax: h, zmin: -h, zmax: h };
+    }
     const s = side(p.team);
     let zmin = -R.HALF_L + R.PLAYER_R, zmax = R.HALF_L - R.PLAYER_R;
     if (p.role === 'F') {
@@ -533,7 +643,7 @@
       let best = null, bestC = Infinity;
       for (const cx of xs) {
         for (const cz of zs) {
-          if (Math.abs(cx) > R.HALF_W - R.PLAYER_R) continue;
+          if (Math.abs(cx) > ARENA.hw - R.PLAYER_R || Math.abs(cz) > ARENA.hl - R.PLAYER_R) continue;
           const d0 = Math.hypot(cx - p.x, cz - p.z);
           const key = cx.toFixed(2) + ',' + cz.toFixed(2);
           // もう着いた角へは戻らない (着いた角から少し離れると、また近い角を選んで行ったり来たりした)
@@ -646,7 +756,8 @@
       const ax = q.x + q.vx * t * lead, az = q.z + q.vz * t * lead;
       const aim = findAim(m.players, p.team, p.x, p.z, q, ax, az);
       if (!aim) continue;
-      const score = d + (hidden ? 5 : 0) + aim.off * 0.8 + (q.role === 'F' && Math.abs(q.z) < 8 ? -2 : 0);
+      const score = d + (hidden ? 5 : 0) + aim.off * 0.8 +
+        (m.mode === 'royale' ? -(R.ROYALE.HP - q.hp) * 1.5 + (q.inv > 0.3 ? 6 : 0) : (q.role === 'F' && Math.abs(q.z) < 8 ? -2 : 0));
       if (score < bestScore) { bestScore = score; best = { q, ax: aim.x, az: aim.z, d, mv: Math.hypot(q.vx, q.vz) * t }; }
     }
     if (!best) return null;
@@ -675,7 +786,8 @@
       if (dir && cos < Math.cos(40 * Math.PI / 180)) continue;   // はじいた向きから 40° 以内
       const ang = Math.acos(Math.max(-1, Math.min(1, cos)));
       const hidden = q.crouch && q.standT <= 0;
-      const score = dir ? ang * 8 + d * 0.15 : d + (cos < 0 ? 12 : 0) + (hidden ? 4 : 0);
+      // バトルロイヤルは前も後ろも敵なので、向きでは選ばない (近い順)
+      const score = dir ? ang * 8 + d * 0.15 : d + (m.mode === 'royale' ? 0 : (cos < 0 ? 12 : 0)) + (hidden ? 4 : 0);
       if (score < bestS) { bestS = score; best = q; }
     }
     return best;
@@ -742,7 +854,7 @@
         let px = -th.b.vz / bl, pz = th.b.vx / bl;
         const rel = (p.x - th.b.x) * px + (p.z - th.b.z) * pz;
         if (rel < 0) { px = -px; pz = -pz; }
-        if (Math.abs(p.x + px * 1.2) > R.HALF_W - 0.4) { px = -px; pz = -pz; }
+        if (Math.abs(p.x + px * 1.2) > ARENA.hw - 0.4 || Math.abs(p.z + pz * 1.2) > ARENA.hl - 0.4) { px = -px; pz = -pz; }
         ai.dodgeT = 0.42; ai.dx = px; ai.dz = pz;
         input.mx = px; input.mz = pz;
         return input;
@@ -753,7 +865,7 @@
     ai.holdT -= dt;
     if (ai.think <= 0) {
       ai.think = lerp(0.55, 0.25, s) * (0.7 + m.rng() * 0.6);
-      aiDecide(m, p);
+      if (m.mode === 'royale') decideRoyale(m, p); else aiDecide(m, p);
       // 投げる
       if (canThrow(p) && m.rng() < lerp(0.45, 0.85, s)) {
         const at = aiChooseThrow(m, p);
@@ -778,6 +890,7 @@
    */
   function aiInput(m, p, dt) {
     const input = aiInputRaw(m, p, dt);
+    if (m.mode === 'royale') return input;      // 敵陣の人数の決まりは無い
     const S = side(p.team);
     if (!inEnemyCourt(p) && input.mz * S < 0 && S * p.z < 0.6 && enemyCourtCount(m, p.team, p) >= R.MAX_IN_ENEMY) {
       input.mz = 0;
@@ -786,6 +899,95 @@
       if (ai.goal && S * ai.goal.z < 0) { ai.goal = null; ai.spot = -1; ai.rush = false; }
     }
     return input;
+  }
+
+  // ------------------------------------------------------------ バトルロイヤルの AI と決着
+  /** 隠れる場所: どの壁にも 4 つ (前後と左右)。会場が変わったら作り直す */
+  let royaleSpotsCache = null;
+  function royaleSpots() {
+    if (royaleSpotsCache) return royaleSpotsCache;
+    const g = R.PLAYER_R + 0.12, L = [];
+    SHELTERS.forEach((s, i) => {
+      for (const [dx, dz] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+        const x = s.x + dx * (s.w / 2 + g), z = s.z + dz * (s.d / 2 + g);
+        if (Math.abs(x) > ARENA.hw - 0.5 || Math.abs(z) > ARENA.hl - 0.5) continue;
+        L.push({ x, z, sh: i, nx: dx, nz: dz });
+      }
+    });
+    royaleSpotsCache = L;
+    return L;
+  }
+
+  /**
+   * 行き先を選ぶ。壁の陰で、近い敵から隠れられる所。
+   * 雪玉が無い・体力 1 のときは、敵から遠い所へ (逃げる)。それ以外は、敵から 8m ほどの所 (撃ち合える距離)。
+   * 着いたらしばらくそこで粘り (しゃがんで丸め、出ては投げる)、敵がすぐそばへ来たら選び直す
+   */
+  function decideRoyale(m, p) {
+    const ai = p.ai, s = skillOf(m, p);
+    const enemies = enemiesOf(m, p);
+    if (!enemies.length) return;
+    const dist = (x, z, q) => Math.hypot(q.x - x, q.z - z);
+    const nearest = (x, z) => enemies.reduce((a, q) => (dist(x, z, q) < dist(x, z, a) ? q : a), enemies[0]);
+    const nq = nearest(p.x, p.z);
+    const danger = dist(p.x, p.z, nq) < 3;
+    const inZone = (x, z) => Math.abs(x) < ARENA.hw - 0.6 && Math.abs(z) < ARENA.hl - 0.6;
+    if (ai.goal && !inZone(ai.goal.x, ai.goal.z)) ai.goal = null;     // 決戦で会場が縮んだ: 外になった行き先は選び直す
+    if (ai.goal) {
+      const there = Math.hypot(ai.goal.x - p.x, ai.goal.z - p.z) < 0.35;
+      if (there && !ai.arrived) { ai.arrived = true; ai.holdT = (lerp(4, 2, s) + m.rng() * 2.5) * (m.final ? 0.5 : 1); }
+      if (!danger && (!there || ai.holdT > 0)) return;
+    }
+    const scared = !m.final && (p.balls === 0 || p.hp <= 1);    // 一騎打ちでは逃げない
+    let best = null, bestS = Infinity;
+    for (const sp of royaleSpots()) {
+      if (!inZone(sp.x, sp.z)) continue;
+      const travel = Math.hypot(sp.x - p.x, sp.z - p.z);
+      if (travel > 16) continue;
+      const e = nearest(sp.x, sp.z);
+      const de = dist(sp.x, sp.z, e);
+      // 壁が、その場所と近くの敵のあいだにあるか (壁から見て、敵が反対側)
+      let covered = 0, crowd = 0;
+      for (const q of enemies) {
+        const dq = dist(sp.x, sp.z, q);
+        if (dq < 4) crowd++;
+        if (dq < 15 && ((q.x - sp.x) * sp.nx + (q.z - sp.z) * sp.nz) < 0) covered++;
+      }
+      const taken = m.players.some((o) => o !== p && o.alive && Math.hypot(o.x - sp.x, o.z - sp.z) < 0.8);
+      // 一騎打ちでは、撃ち合う距離を詰める (6m)。粘る時間も短くする (下の holdT)
+      const want = m.final ? 6 : 8;
+      const score = travel * 0.45 + (scared ? -Math.min(de, 16) * 0.7 : Math.abs(de - want) * 0.6) -
+        covered * 1.6 + crowd * 3 + (taken ? 6 : 0) + m.rng() * 1.5;
+      if (score < bestS) { bestS = score; best = sp; }
+    }
+    if (!best) return;
+    ai.goal = { x: best.x, z: best.z };
+    ai.arrived = false;
+    ai.spot = -1;
+    ai.rush = false;
+  }
+
+  /** 残り 1 人か時間切れで決着。順位: 残っている人 (体力・倒した数の順) → あとで脱落した人ほど上 */
+  function checkRoyaleEnd(m) {
+    const alive = m.players.filter((p) => p.alive);
+    // 残り 2 人で決戦 (FINAL BATTLE): 会場が縮み、時間は少なくとも 30 秒残す
+    if (alive.length === 2 && m.time > 0 && !m.final) {
+      m.final = { t: 0, ids: alive.map((p) => p.id) };
+      m.time = Math.max(m.time, R.ROYALE.FINAL_TIME);
+      m.events.push({ type: 'final', ids: m.final.ids.slice() });
+    }
+    if (alive.length > 1 && m.time > 0) return;
+    m.time = Math.max(0, m.time);
+    alive.sort((a, b) => b.hp - a.hp || b.kills - a.kills || a.id - b.id);
+    const ranking = alive.map((p) => p.id).concat(m.out.slice().reverse());
+    ranking.forEach((id, i) => { m.players[id].place = i + 1; });
+    m.ranking = ranking;
+    m.winner = ranking[0];
+    m.decidedBy = alive.length <= 1 ? 'last' : 'time';
+    m.phase = 'setOver';
+    m.phaseTime = R.SET_OVER;
+    m.balls = [];
+    m.events.push({ type: 'royaleEnd', ranking, winner: m.winner, by: m.decidedBy });
   }
 
   function aiDecide(m, p) {
@@ -1066,9 +1268,18 @@
    * どちらからも届かなければ null (のぞいても投げられない)。
    */
   function peekSpot(p, s, tx, tz) {
+    // 壁の長い方の端から出る (バトルロイヤルには、縦に長い壁もある)
+    if (s.d > s.w) {
+      const half = s.d / 2 + R.PLAYER_R + R.PEEK_OUT;
+      const ends = [s.z - half, s.z + half]
+        .filter((z) => Math.abs(z) <= ARENA.hl - R.PLAYER_R)
+        .sort((a, b) => Math.abs(a - p.z) - Math.abs(b - p.z));
+      for (const z of ends) if (!coverWall({ x: p.x, z }, tx, tz)) return { x: p.x, z };
+      return null;
+    }
     const half = s.w / 2 + R.PLAYER_R + R.PEEK_OUT;
     const ends = [s.x - half, s.x + half]
-      .filter((x) => Math.abs(x) <= R.HALF_W - R.PLAYER_R)
+      .filter((x) => Math.abs(x) <= ARENA.hw - R.PLAYER_R)
       .sort((a, b) => Math.abs(a - p.x) - Math.abs(b - p.x));
     for (const x of ends) if (!coverWall({ x, z: p.z }, tx, tz)) return { x, z: p.z };
     return null;
@@ -1076,7 +1287,7 @@
 
   /** のぞき投げを始める。出られる端が無ければ false */
   function startPeek(m, p, shot) {
-    const t = shot || { x: p.x, z: p.z - side(p.team) * 10 };
+    const t = shot || (m.mode === 'royale' ? { x: p.x + Math.sin(p.face) * 10, z: p.z + Math.cos(p.face) * 10 } : { x: p.x, z: p.z - side(p.team) * 10 });
     const s = coverWall(p, t.x, t.z);
     if (!s) return false;
     const sp = peekSpot(p, s, t.x, t.z);
@@ -1150,6 +1361,7 @@
    */
   function step(m, dt, input) {
     if (!(dt > 0)) return m;
+    useArena(m);
     dt = Math.min(dt, 0.05);
 
     if (m.phase === 'countdown') {
@@ -1176,6 +1388,7 @@
       if (!p.alive) continue;
       p.cd = Math.max(0, p.cd - dt);
       p.standT = Math.max(0, p.standT - dt);
+      if (p.inv > 0) p.inv = Math.max(0, p.inv - dt);
       let inp = isHuman(m, p) ? (input || {}) : aiInput(m, p, dt);
       if (isHuman(m, p)) {
         m.humanAim = (inp.aiming && inp.aimTarget != null && m.aimMode !== 'easy') ? { target: inp.aimTarget, f: p.aimF } : null;
@@ -1192,8 +1405,8 @@
     }
     separate(m.players);
     stepBalls(m, dt);
-    handOver(m);
-    checkSetEnd(m);
+    if (m.mode === 'royale') { if (m.final) m.final.t += dt; checkRoyaleEnd(m); }
+    else { handOver(m); checkSetEnd(m); }
     return m;
   }
 
@@ -1210,6 +1423,6 @@
     createMatch, startSet, step, drainEvents,
     launch, trajectory, predictHit, findAim, throwBall, ballCollide, playerHeight,
     movePlayer, pushOutOfShelters, limits, aliveCount, steer, blockingShelter,
-    aiInput, threatOf, inEnemyCourt, enemyCourtCount, setPoints, startVT, hitsFlag, predictVT, pickTarget, assistAim, aimSpread, coverWall
+    aiInput, threatOf, inEnemyCourt, enemyCourtCount, setPoints, startVT, hitsFlag, predictVT, pickTarget, assistAim, aimSpread, coverWall, useArena, ARENA
   };
 });

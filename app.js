@@ -7,7 +7,7 @@
   const C = window.Core;
   const R = C.R;
   const T = window.THREE;
-  const VERSION = 'v17';
+  const VERSION = 'v19';
   const AI_SKILL = 0.5;      // 相手の強さ (前の「ふつう」)。強さのえらびはやめ、投げ方をえらぶ
   const AUTO_CROUCH = 0.2;
   const CANCEL = { out: 40, back: 18 };   // 投げるボタン: 40px 以上引っぱってから 18px 以内へ戻して離すと取り消し   // 止まってからしゃがむまで (秒)
@@ -35,21 +35,31 @@
     vTitle: $('vTitle'), vPause: $('vPause'), vResult: $('vResult'),
     btnStart: $('btnStart'), btnPause: $('btnPause'), btnResume: $('btnResume'), btnQuit: $('btnQuit'),
     btnAgain: $('btnAgain'), btnToTitle: $('btnToTitle'), resultTitle: $('resultTitle'), resultSets: $('resultSets'),
-    ver: $('ver')
+    ver: $('ver'), tagLine: $('tagLine'),
+    rAlive: $('rAlive'), rDots: $('rDots'), rTime: $('rTime'), rHp: $('rHp'), rKills: $('rKills'), rLabel: $('rLabel')
   };
 
+  // 0 あお・1 あか はチーム戦と同じ。2〜7 はバトルロイヤルの色 (絵は、あおの青い所を塗り替えて作る)
   const COLORS = {
-    team: [0x2f6fe0, 0xe0413a],
-    teamDark: [0x1d4fb0, 0xa8251f],
+    team: [0x2f6fe0, 0xe0413a, 0x3fae5a, 0xf2c230, 0x9b5fe0, 0xff7fb5, 0xff8a2a, 0x4fc3e8],
+    teamDark: [0x1d4fb0, 0xa8251f, 0x23783a, 0xb88a10, 0x6a35b0, 0xc84f88, 0xc45a10, 0x2a8fb8],
     snow: 0xf4f8fd,
     court: 0xeaf3fc,
     shelter: [0x7fb4ef, 0xf09a92, 0xe8eef6]
   };
 
+  const NAMES = ['あお', 'あか', 'みどり', 'きいろ', 'むらさき', 'もも', 'だいだい', 'みずいろ'];
+  const RECOLOR = { 2: { h: 128 }, 3: { h: 46, v: 1.12 }, 4: { h: 276 }, 5: { h: 330, s: 0.62, v: 1.15 }, 6: { h: 24 }, 7: { h: 190, s: 0.75, v: 1.1 } };
+  // バトルロイヤル: いちばん初めの高いカメラ (21m 上・10m 後ろ・5m 先、画角 52°)。前後左右に敵がいるので、低いカメラでは死角から当てられた。
+// 決戦 (残り 2 人) では FINAL 倍まで寄る
+const ROYALE_CAM = { h: 21, back: 10, ahead: 5, fov: 52, final: 0.72 };
+  const teamHex = (t) => '#' + COLORS.team[t].toString(16).padStart(6, '0');
+
   // ------------------------------------------------------------ 状態
   const app = {
     match: null,
-    aimMode: 'easy',     // 投げ方: 'easy' = 押したらすぐ・玉が曲がる / 'hard' = 押さえて構え、離して投げる
+    aimMode: 'easy',
+    gameMode: 'team',    // あそび方: 'team' = チーム戦 7対7 / 'royale' = バトルロイヤル (8 人・全員が敵)     // 投げ方: 'easy' = 押したらすぐ・玉が曲がる / 'hard' = 押さえて構え、離して投げる
     paused: false,
     running: false,
     acc: 0,
@@ -104,13 +114,47 @@
     return mat;
   }
 
+  // 決戦の柵 (4 本の細い箱。毎コマ、縮んだ会場の大きさに合わせる)
+  const zoneMat = new T.MeshBasicMaterial({ color: 0xff3020, transparent: true, opacity: 0.6, depthWrite: false });
+  const zone = new T.Group();
+  for (let i = 0; i < 4; i++) {
+    const g = i < 2 ? new T.BoxGeometry(1, 0.6, 0.12) : new T.BoxGeometry(0.12, 0.6, 1);
+    zone.add(new T.Mesh(g, zoneMat));
+  }
+  // 柵の外の地面を赤く沈める (入れない所が分かるように)。4 枚の板: 北・南・西・東
+  const outMat = new T.MeshBasicMaterial({ color: 0xc02818, transparent: true, opacity: 0.22, depthWrite: false });
+  const outside = [];
+  for (let i = 0; i < 4; i++) {
+    const pl = new T.Mesh(new T.PlaneGeometry(1, 1), outMat);
+    pl.rotation.x = -Math.PI / 2; pl.renderOrder = 1;
+    zone.add(pl); outside.push(pl);
+  }
+  zone.visible = false;
+  scene.add(zone);
+
+  // 会場 (地面・線・壁・景色) は、モードが変わったら作り直す。作った物は全部 fieldRoot の下にまとめる
+  const fieldRoot = new T.Group();
+  function ensureField(mode) {
+    if (app.fieldMode === mode) return;
+    app.fieldMode = mode;
+    for (const c of fieldRoot.children.slice()) {
+      fieldRoot.remove(c);
+      c.traverse((o) => { if (o.geometry) o.geometry.dispose(); });
+    }
+    const before = new Set(scene.children);
+    buildField();
+    for (const c of scene.children.slice()) if (!before.has(c) && c !== fieldRoot) fieldRoot.add(c);
+    if (!fieldRoot.parent) scene.add(fieldRoot);
+  }
+
   function buildField() {
+    const HW = C.ARENA.hw, HL = C.ARENA.hl, royale = C.ARENA.mode === 'royale';
     // 雪面は 1 枚の絵が 6m 四方 (コートの中は 3.4m) になるように敷きつめる
     const ground = new T.Mesh(new T.PlaneGeometry(90, 120), applyTex(lambert(COLORS.snow), 'tex_ground.jpg', [15, 20]));
     ground.rotation.x = -Math.PI / 2;
     scene.add(ground);
 
-    const court = new T.Mesh(new T.PlaneGeometry(R.HALF_W * 2, R.HALF_L * 2), applyTex(lambert(COLORS.court), 'tex_court.jpg', [3, 10.6]));
+    const court = new T.Mesh(new T.PlaneGeometry(HW * 2, HL * 2), applyTex(lambert(COLORS.court), 'tex_court.jpg', [HW * 0.3, HL * 0.294]));
     court.rotation.x = -Math.PI / 2;
     court.position.y = 0.005;
     scene.add(court);
@@ -121,16 +165,16 @@
       m.rotation.x = -Math.PI / 2; m.position.set(x, 0.012, z);
       scene.add(m);
     };
-    line(R.HALF_W * 2 + 0.12, 0.12, 0, R.HALF_L);
-    line(R.HALF_W * 2 + 0.12, 0.12, 0, -R.HALF_L);
-    line(0.12, R.HALF_L * 2, R.HALF_W, 0);
-    line(0.12, R.HALF_L * 2, -R.HALF_W, 0);
+    line(HW * 2 + 0.12, 0.12, 0, HL);
+    line(HW * 2 + 0.12, 0.12, 0, -HL);
+    line(0.12, HL * 2, HW, 0);
+    line(0.12, HL * 2, -HW, 0);
     app.centerLine = new T.MeshBasicMaterial({ color: 0xe86a62 });
-    line(R.HALF_W * 2, 0.16, 0, 0, app.centerLine);
+    if (!royale) line(HW * 2, 0.16, 0, 0, app.centerLine);   // バトルロイヤルにはセンターライン・バックライン・フラッグが無い
     // バックライン: フォワードはここより後ろへ下がれない
     const backMat = new T.MeshBasicMaterial({ color: 0x8fb6dc });
-    for (const sgn of [1, -1]) {
-      for (let x = -R.HALF_W + 0.25; x < R.HALF_W; x += 0.9) line(0.5, 0.1, x, sgn * R.BACK_LINE_U, backMat);
+    if (!royale) for (const sgn of [1, -1]) {
+      for (let x = -HW + 0.25; x < HW; x += 0.9) line(0.5, 0.1, x, sgn * R.BACK_LINE_U, backMat);
     }
 
     // シェルターとシャトー (空気でふくらませた白い壁。チームの色の帯つき)。
@@ -159,7 +203,7 @@
     }
 
     // フラッグ
-    app.flags = [0, 1].map((team) => {
+    app.flags = (royale ? [] : [0, 1]).map((team) => {
       const f = C.flagPos(team);
       const g = new T.Group();
       const pole = new T.Mesh(new T.CylinderGeometry(0.035, 0.035, 2.2, 8), lambert(0x6b7380));
@@ -192,16 +236,18 @@
   // 背の高い物はコートの外 2m 以上離して置く (カメラから見て、コートの上にかぶらない)
   const scenery = { fans: [], cheerT: [0, 0], bodies: null, heads: null, hats: null };
   function buildScenery() {
+    const HW = C.ARENA.hw, HL = C.ARENA.hl;
+    scenery.fans = []; scenery.cheerT = [0, 0];
     const rng = C.mulberry32(99);
     const o = new T.Object3D();
     const put = (mesh, i, x, y, z, sx, sy, sz, ry) => {
       o.position.set(x, y, z); o.rotation.set(0, ry || 0, 0); o.scale.set(sx, sy, sz == null ? sx : sz); o.updateMatrix(); mesh.setMatrixAt(i, o.matrix);
     };
-    const END = R.HALF_L + 1.6;      // 板の位置 (エンドラインの 1.6m 外)
+    const END = HL + 1.6;      // 板の位置 (エンドラインの 1.6m 外)
 
     // 木: 3 段の枝 (緑の円すい) に、それぞれ雪の帽子。幹
     const trees = [];
-    const far = (x, z) => Math.abs(x) > R.HALF_W + 2.5 || Math.abs(z) > END + 4.5;
+    const far = (x, z) => Math.abs(x) > HW + 2.5 || Math.abs(z) > END + 4.5;
     for (let i = 0; i < 400 && trees.length < 90; i++) {
       const x = (rng() * 2 - 1) * 26, z = (rng() * 2 - 1) * 46;
       if (!far(x, z)) continue;
@@ -229,7 +275,7 @@
     const mounds = new T.InstancedMesh(new T.SphereGeometry(1, 9, 5), lambert(0xffffff), NM);
     for (let i = 0; i < NM; i++) {
       let x, z;
-      do { x = (rng() * 2 - 1) * 20; z = (rng() * 2 - 1) * 40; } while (!(Math.abs(x) > R.HALF_W + 1.8 || Math.abs(z) > END + 4.5));
+      do { x = (rng() * 2 - 1) * 20; z = (rng() * 2 - 1) * 40; } while (!(Math.abs(x) > HW + 1.8 || Math.abs(z) > END + 4.5));
       put(mounds, i, x, 0, z, 1.2 + rng() * 2, 0.35 + rng() * 0.45, 1.2 + rng() * 1.6, rng() * 3);
     }
     scene.add(mounds);
@@ -237,7 +283,7 @@
     // 雪だるま (コートの四すみの外)
     const white = lambert(0xffffff), coal = lambert(0x2a2f3a), carrot = lambert(0xff8a2a);
     const ball = new T.SphereGeometry(1, 14, 10), eye = new T.SphereGeometry(0.05, 6, 4), nose = new T.ConeGeometry(0.06, 0.3, 6);
-    for (const [x, z, team] of [[-R.HALF_W - 2.4, END - 0.4, 0], [R.HALF_W + 2.4, END - 0.4, 0], [-R.HALF_W - 2.4, -END + 0.4, 1], [R.HALF_W + 2.4, -END + 0.4, 1]]) {
+    for (const [x, z, team] of [[-HW - 2.4, END - 0.4, 0], [HW + 2.4, END - 0.4, 0], [-HW - 2.4, -END + 0.4, 1], [HW + 2.4, -END + 0.4, 1]]) {
       const g = new T.Group();
       const b1 = new T.Mesh(ball, white); b1.scale.setScalar(0.55); b1.position.y = 0.5;
       const b2 = new T.Mesh(ball, white); b2.scale.setScalar(0.38); b2.position.y = 1.25;
@@ -265,9 +311,9 @@
       const sz = team === 0 ? 1 : -1;
       const z0 = sz * END;
       // 低い板 (チーム色) と、白い帯
-      const board = new T.Mesh(new T.BoxGeometry(R.HALF_W * 2 + 3, 0.7, 0.18), lambert(COLORS.team[team]));
+      const board = new T.Mesh(new T.BoxGeometry(HW * 2 + 3, 0.7, 0.18), lambert(COLORS.team[team]));
       board.position.set(0, 0.35, z0); scene.add(board);
-      const band = new T.Mesh(new T.BoxGeometry(R.HALF_W * 2 + 3, 0.12, 0.19), lambert(0xffffff));
+      const band = new T.Mesh(new T.BoxGeometry(HW * 2 + 3, 0.12, 0.19), lambert(0xffffff));
       band.position.set(0, 0.5, z0); scene.add(band);
       // 旗 (板の上に 5 本)
       for (let k = -2; k <= 2; k++) {
@@ -439,10 +485,47 @@
     }, undefined, () => { sprites.failed = true; });   // 読めなければ、今までの 3D の体のまま
   }
 
+  /**
+   * バトルロイヤルの色 (2〜7) の絵: あおの行 (上の 3 行) の青い所だけ、色相を塗り替える
+   * (art/make_sprites.py で、あかを作るのと同じ見分け方: 色相 205〜250°・彩度 0.62 より上・明るさ 0.3 より上)
+   */
+  function colorTex(team) {
+    if (team <= 1 || !RECOLOR[team] || !sprites.tex) return sprites.tex;
+    sprites.colors = sprites.colors || {};
+    if (sprites.colors[team]) return sprites.colors[team];
+    const img = sprites.tex.image;
+    const cv = document.createElement('canvas');
+    cv.width = img.width; cv.height = img.height;
+    const g = cv.getContext('2d');
+    g.drawImage(img, 0, 0);
+    const H = Math.round(img.height / SPR.rows * 3);
+    const d = g.getImageData(0, 0, img.width, H);
+    const a = d.data, rc = RECOLOR[team];
+    for (let i = 0; i < a.length; i += 4) {
+      if (a[i + 3] < 8) continue;
+      const r = a[i] / 255, gg = a[i + 1] / 255, b = a[i + 2] / 255;
+      const mx = Math.max(r, gg, b), mn = Math.min(r, gg, b), c = mx - mn;
+      if (mx < 0.3 || c / mx < 0.62) continue;
+      let h = mx === r ? ((gg - b) / c) % 6 : mx === gg ? (b - r) / c + 2 : (r - gg) / c + 4;
+      h *= 60; if (h < 0) h += 360;
+      if (h < 205 || h > 250) continue;
+      const sat = Math.min(1, (c / mx) * (rc.s || 1)), val = Math.min(1, mx * (rc.v || 1));
+      const nh = (rc.h + (h - 225)) / 60, cc = val * sat, x = cc * (1 - Math.abs((nh % 2 + 2) % 2 - 1)), m0 = val - cc;
+      const k = Math.floor(((nh % 6) + 6) % 6);
+      const [r1, g1, b1] = [[cc, x, 0], [x, cc, 0], [0, cc, x], [0, x, cc], [x, 0, cc], [cc, 0, x]][k];
+      a[i] = (r1 + m0) * 255; a[i + 1] = (g1 + m0) * 255; a[i + 2] = (b1 + m0) * 255;
+    }
+    g.putImageData(d, 0, 0);
+    const t = new T.CanvasTexture(cv);
+    t.colorSpace = T.SRGBColorSpace; t.anisotropy = 4;
+    sprites.colors[team] = t;
+    return t;
+  }
+
   function attachSprite(v) {
     if (!sprites.tex || v.spr) return;
     const geo = sprGeo.clone();
-    const mat = new T.MeshBasicMaterial({ map: sprites.tex, transparent: true, alphaTest: 0.25 });
+    const mat = new T.MeshBasicMaterial({ map: colorTex(v.team || 0), transparent: true, alphaTest: 0.25 });
     const mesh = new T.Mesh(geo, mat);
     mesh.renderOrder = 3;
     scene.add(mesh);
@@ -491,14 +574,33 @@
     return C.playerHeight(p) + 0.6;
   }
 
+  /** 体力の絵 (雪玉 3 つ。残りは白、減った所は暗い穴)。hp ごとに 1 枚 */
+  const hpTexCache = {};
+  function hpTex(hp) {
+    if (hpTexCache[hp]) return hpTexCache[hp];
+    const c = document.createElement('canvas'); c.width = 96; c.height = 32;
+    const g = c.getContext('2d');
+    for (let i = 0; i < R.ROYALE.HP; i++) {
+      const x = 16 + i * 32, y = 16;
+      g.beginPath(); g.arc(x, y, 12, 0, Math.PI * 2);
+      g.fillStyle = i < hp ? (hp === 1 ? '#ff5a4a' : '#ffffff') : 'rgba(20,30,50,.55)'; g.fill();
+      g.lineWidth = 3; g.strokeStyle = i < hp ? '#1d3a6a' : 'rgba(255,255,255,.6)'; g.stroke();
+    }
+    const t = new T.CanvasTexture(c); t.colorSpace = T.SRGBColorSpace;
+    return (hpTexCache[hp] = t);
+  }
+
   function resetPlayers() {
     for (const v of views.players) {
       scene.remove(v.root); scene.remove(v.shadow);
       if (v.spr) { scene.remove(v.spr.mesh); v.spr.mesh.geometry.dispose(); v.spr.mesh.material.dispose(); }
       if (v.mark) scene.remove(v.mark);
+      if (v.hpSpr) { scene.remove(v.hpSpr); v.hpSpr.material.dispose(); }
     }
-    views.players = app.match.players.map(makePlayerMesh);
+    views.players = app.match.players.map((p) => { const v = makePlayerMesh(p); v.team = p.team; return v; });
     views.players.forEach(attachSprite);
+    // バトルロイヤル: 頭の上に体力 (雪玉 3 つ)
+    if (app.match.mode === 'royale') views.players.forEach((v) => { v.hpSpr = new T.Sprite(new T.SpriteMaterial({ map: hpTex(R.ROYALE.HP), depthTest: false, transparent: true })); v.hpSpr.scale.set(1.05, 0.35, 1); v.hpSpr.renderOrder = 7; scene.add(v.hpSpr); });
     for (const [, b] of views.balls) { scene.remove(b.mesh); scene.remove(b.shadow); }
     views.balls.clear();
   }
@@ -520,7 +622,8 @@
 
   const puffGeo = new T.SphereGeometry(0.07, 6, 4);
   const puffMat = lambert(0xffffff);
-  function puff(x, y, z, n, power) {
+  const puffMats = { blue: lambert(0x7cc4ff, { emissive: 0x2a5aa0 }), red: lambert(0xff6a5a, { emissive: 0x902020 }) };
+  function puff(x, y, z, n, power, color) {
     for (let i = 0; i < n; i++) {
       let p = views.puffs.find((q) => q.life <= 0);
       if (!p) {
@@ -529,6 +632,7 @@
         scene.add(p.mesh);
         views.puffs.push(p);
       }
+      p.mesh.material = color ? puffMats[color] : puffMat;
       const a = Math.random() * Math.PI * 2;
       const sp = (0.8 + Math.random() * 2.2) * (power || 1);
       p.vx = Math.cos(a) * sp; p.vz = Math.sin(a) * sp; p.vy = 1 + Math.random() * 2.5 * (power || 1);
@@ -818,8 +922,124 @@
       for (let i = 0; i < x.length; i++) { const v = Math.abs(x[i]); if (v > peak) peak = v; sum += x[i] * x[i]; }
       return { peak, rms: Math.sqrt(sum / x.length) };
     }
+    // ---------------- BGM (バトルロイヤルだけ)。16 分音符の歩みで、少し先まで予約して鳴らす
+    // 曲: 和音の根音 (midi) と長短、1 小節 16 歩。bass / arp / drum の作りは曲ごと
+    const SONGS = {
+      royale: { bpm: 124, roots: [45, 41, 48, 43], minor: [1, 0, 0, 0], vol: 1 },
+      final: { bpm: 158, roots: [50, 46, 48, 45], minor: [1, 0, 0, 0], vol: 1 }
+    };
+    const hz = (n) => 440 * Math.pow(2, (n - 69) / 12);
+    function vnote(ac, out, t, freq, dur, vol, type, cutoff) {
+      const o = ac.createOscillator(); o.type = type; o.frequency.setValueAtTime(freq, t);
+      const g = ac.createGain();
+      g.gain.setValueAtTime(0.0001, t);
+      g.gain.exponentialRampToValueAtTime(vol, t + 0.008);
+      g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+      let node = o;
+      if (cutoff) { const f = ac.createBiquadFilter(); f.type = 'lowpass'; f.frequency.value = cutoff; o.connect(f); node = f; }
+      node.connect(g); g.connect(out);
+      o.start(t); o.stop(t + dur + 0.03);
+    }
+    function vnoise(ac, out, buf, t, dur, freq, type, vol) {
+      const src = ac.createBufferSource(); src.buffer = buf;
+      const f = ac.createBiquadFilter(); f.type = type; f.frequency.value = freq;
+      const g = ac.createGain();
+      g.gain.setValueAtTime(vol, t);
+      g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+      src.connect(f); f.connect(g); g.connect(out);
+      src.start(t); src.stop(t + dur + 0.02);
+    }
+    function kick(ac, out, t, vol) {
+      const o = ac.createOscillator(); o.type = 'sine';
+      o.frequency.setValueAtTime(150, t); o.frequency.exponentialRampToValueAtTime(45, t + 0.12);
+      const g = ac.createGain(); g.gain.setValueAtTime(vol, t); g.gain.exponentialRampToValueAtTime(0.0001, t + 0.18);
+      o.connect(g); g.connect(out); o.start(t); o.stop(t + 0.2);
+    }
+    /** 曲 name の i 歩目を、時刻 t に予約する */
+    function musicStep(ac, out, buf, name, i, t) {
+      const S = SONGS[name], st = i % 16, bar = Math.floor(i / 16) % S.roots.length;
+      const r = S.roots[bar], third = S.minor[bar] ? 3 : 4;
+      const sp = 60 / S.bpm / 4;
+      const chord = [0, third, 7, 12, 7, third];
+      if (name === 'royale') {
+        // 軽い: 8 分のベース (裏はオクターブ上)・三角波の分散和音・キックとハイハットは控えめ
+        if (st % 2 === 0) vnote(ac, out, t, hz(r - 12 + (st % 4 === 2 ? 12 : 0)), sp * 1.8, 0.16, 'triangle');
+        if (st % 2 === 0) vnote(ac, out, t, hz(r + 12 + chord[(st / 2) % chord.length]), sp * 1.6, 0.05, 'square', 2400);
+        if (st % 8 === 0) kick(ac, out, t, 0.32);
+        if (st % 4 === 2) vnoise(ac, out, buf, t, 0.04, 7000, 'highpass', 0.05);
+      } else {
+        // 決戦: 速く、16 分で刻むベース・のこぎり波の駆け上がり・4 つ打ちとスネア
+        vnote(ac, out, t, hz(r - 12 + (st % 2 ? 12 : 0)), sp * 0.9, 0.12, 'sawtooth', 900);
+        const run = [0, third, 7, 12, 15, 12, 7, third];
+        if (st % 2 === 0) vnote(ac, out, t, hz(r + 12 + run[(st / 2) % run.length] + (bar === 3 && st >= 8 ? 2 : 0)), sp * 1.7, 0.045, 'square', 3200);
+        if (st === 0) vnote(ac, out, t, hz(r + 24), sp * 7, 0.035, 'sawtooth', 2600);
+        if (st % 4 === 0) kick(ac, out, t, 0.4);
+        if (st === 4 || st === 12) vnoise(ac, out, buf, t, 0.12, 1800, 'bandpass', 0.22);
+        if (st % 2 === 1) vnoise(ac, out, buf, t, 0.03, 8000, 'highpass', 0.06);
+      }
+    }
+    const MUSIC_LEVEL = 0.75;   // 曲の平均 0.013〜0.018・最大 0.14〜0.16 (効果音のバシッ 0.30 より小さく、ずっと鳴るので控えめ)
+    const mus = { name: null, bus: null, step: 0, nextT: 0, timer: null, muted: false };
+    function music(name) {
+      if (!ctx) return;
+      if (mus.name === name) return;
+      const now = ctx.currentTime;
+      if (mus.bus) {
+        // いまの大きさから落とす (値を読まない。読むと予約した値が見えず、バチッと鳴ることがある)
+        const old = mus.bus;
+        old.gain.cancelScheduledValues(now); old.gain.setTargetAtTime(0, now, 0.08);
+        setTimeout(() => old.disconnect(), 800);
+      }
+      mus.name = name; mus.bus = null;
+      if (!name) return;
+      mus.bus = ctx.createGain();
+      mus.bus.gain.value = mus.muted ? 0 : MUSIC_LEVEL;
+      mus.bus.connect(master);
+      mus.step = 0; mus.nextT = now + 0.06;
+      if (!mus.timer) mus.timer = setInterval(pump, 40);
+    }
+    function pump() {
+      if (!ctx || !mus.name || !mus.bus) return;
+      const sp = 60 / SONGS[mus.name].bpm / 4;
+      if (mus.nextT < ctx.currentTime - 0.5) mus.nextT = ctx.currentTime + 0.05;   // 止まっていた (裏へ回った) あとは追いつかせない
+      while (mus.nextT < ctx.currentTime + 0.18) {
+        musicStep(ctx, mus.bus, noise, mus.name, mus.step, mus.nextT);
+        mus.step++; mus.nextT += sp;
+      }
+    }
+    function musicMute(on) {
+      mus.muted = on;
+      if (!ctx || !mus.bus) return;
+      const now = ctx.currentTime;
+      mus.bus.gain.cancelScheduledValues(now); mus.bus.gain.setTargetAtTime(on ? 0 : MUSIC_LEVEL, now, 0.05);
+    }
+    /** 曲を音の出ない所で sec 秒描き出して、大きさを測る (確かめ用) */
+    async function measureMusic(name, sec) {
+      const OAC = window.OfflineAudioContext || window.webkitOfflineAudioContext;
+      if (!OAC || !SONGS[name]) return null;
+      const oc = new OAC(1, Math.round(44100 * sec), 44100);
+      const m0 = oc.createGain(); m0.gain.value = 0.5; m0.connect(oc.destination);
+      const bus = oc.createGain(); bus.gain.value = MUSIC_LEVEL; bus.connect(m0);
+      const nb = oc.createBuffer(1, oc.sampleRate * 0.5, oc.sampleRate);
+      const d = nb.getChannelData(0);
+      for (let i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1;
+      const sp = 60 / SONGS[name].bpm / 4;
+      for (let i = 0, t = 0.01; t < sec - 0.3; i++, t += sp) musicStep(oc, bus, nb, name, i, t);
+      const buf = await oc.startRendering();
+      const x = buf.getChannelData(0);
+      let peak = 0, sum = 0;
+      for (let i = 0; i < x.length; i++) { const v = Math.abs(x[i]); if (v > peak) peak = v; sum += x[i] * x[i]; }
+      return { peak, rms: Math.sqrt(sum / x.length) };
+    }
+
     const api = {
-      unlock, measure,
+      unlock, measure, music, musicMute, measureMusic,
+      musicName: () => mus.name,
+      /** 決戦の始まり: 下から駆け上がる音と、高いシンバル */
+      final() {
+        [0, 4, 7, 12, 16].forEach((n, i) => setTimeout(() => tone(hz(62 + n), 0.16, 0.16, 'square'), i * 70));
+        setTimeout(() => burst(0.6, 6000, 0.5, 0.3, 'highpass'), 360);
+      },
       throw() { burst(0.16, 1400, 0.8, 0.25, 'bandpass'); },
       steady() { tone(1320, 0.07, 0.12, 'triangle'); },
       /** 大玉を投げた: 低くうなる音 */
@@ -851,12 +1071,9 @@
   // ------------------------------------------------------------ 試合の流れ
   function startMatch() {
     sound.unlock();
-    app.match = C.createMatch({
-      seed: (Math.random() * 4294967296) >>> 0,
-      skill: [0.55, AI_SKILL],
-      human: 1,
-      aimMode: app.aimMode
-    });
+    sound.music(null); sound.musicMute(false);
+    app.match = newMatch((Math.random() * 4294967296) >>> 0);
+    ensureField(app.match.mode);
     resetPlayers();
     app.hud = {};
     app.paused = false;
@@ -866,8 +1083,26 @@
     els.vTitle.hidden = true;
     els.vResult.hidden = true;
     els.vPause.hidden = true;
+    app.outAt = 0;
+    els.game.classList.toggle('royale-mode', app.match.mode === 'royale');
     snapCamera();
     handleEvents();
+  }
+  function newMatch(seed) {
+    return app.gameMode === 'royale'
+      ? C.createMatch({ mode: 'royale', seed, human: 0, aiSkill: AI_SKILL, aimMode: app.aimMode })
+      : C.createMatch({ seed, skill: [0.55, AI_SKILL], human: 1, aimMode: app.aimMode });
+  }
+
+  /**
+   * バトルロイヤルで自分が脱落したら、残りは見ずに先へ進めて結果を出す (描かずに試合を最後まで回す)。
+   * 1 試合 180 秒 = 10800 歩。上限を置いて、終わらなければそこで止める
+   */
+  function finishRoyale() {
+    const m = app.match;
+    for (let i = 0; i < 20000 && m.phase !== 'matchOver'; i++) C.step(m, 1 / 60, {});
+    C.drainEvents(m);
+    if (m.phase === 'matchOver') showResult();
   }
 
   /** 3D の位置に、ぽんと浮かぶ文字 */
@@ -876,9 +1111,10 @@
    * 0.08 秒で大きく飛び出し、少し縮みながら 0.5 秒で消える。連続ヒットは下に小さく添える
    */
   const HIT_SHAKE = { time: 0.2, amp: 0.22 };   // 揺れ: 0.2 秒、はじめ 0.22m (画面で 8px ほど) から 0 へ
-  function hitText(sub) {
-    app.hitTextUntil = performance.now() + 500;
-    return bigText([{ t: 'HIT!!', cls: 'l1' }, sub && { t: sub, cls: 'sub' }], 'red', 500, 'hit-text');
+  function hitText(sub, main, dur) {
+    dur = dur || 500;
+    app.hitTextUntil = performance.now() + dur;
+    return bigText([{ t: main || 'HIT!!', cls: 'l1' }, sub && { t: sub, cls: 'sub' }], 'red', dur, 'hit-text');
   }
 
   /**
@@ -944,12 +1180,24 @@
         case 'setStart':
           resetPlayers();
           snapCamera();
+          if (e.royale) { showBanner('BATTLE ROYALE<small>8人全員が敵。最後の1人まで生き残れ</small>', '', R.COUNTDOWN); break; }
           showBanner(`SET ${e.setNo}<small>${e.setNo === 1 ? '敵陣のフラッグをめざせ' : 'よーい…'}</small>`, '', R.COUNTDOWN);
           break;
         case 'go':
           showBanner('スタート!', '', 0.8);
           sound.whistle(false);
+          if (m.mode === 'royale') sound.music(m.final ? 'final' : 'royale');
           break;
+        case 'final': {
+          // 残り 2 人: 決戦。会場が縮み、カメラが寄り、曲が替わる
+          els.banner.hidden = true;
+          sound.final();
+          if (m.human != null && m.players[m.human].alive) sound.music('final');
+          const names = e.ids.map((id) => (id === mine ? 'あなた' : NAMES[m.players[id].team])).join(' vs ');
+          bigText([{ t: 'FINAL', cls: 'l1' }, { t: 'BATTLE!!', cls: 'l1' }, { t: names, cls: 'info' }], 'red', 2400, 'final-text');
+          app.finalFlash = 1;
+          break;
+        }
         case 'throw': {
           const v = views.players[e.player];
           if (v) v.throwT = 0.35;
@@ -976,7 +1224,60 @@
           sound.splat(p && Math.hypot(e.x - p.x, e.z - p.z) < 3);
           break;
         }
+        case 'hurt': {
+          // バトルロイヤル: 体力が減った (1 回目は青い雪、2 回目は赤い雪 = あと 1 回)
+          puff(e.x, e.y, e.z, e.hp <= 1 ? 26 : 20, 1.4, e.hp <= 1 ? 'red' : 'blue');
+          const vq = views.players[e.player];
+          if (vq) vq.hurtT = 0.35;
+          if (e.player === mine) {
+            app.shake = 0.35; sound.hit();
+            showBanner(e.hp <= 1 ? 'あと1回で脱落!<small>体力 1</small>' : `当たった!<small>体力 ${e.hp}</small>`, 'red', 1.1);
+          } else if (e.by === mine) {
+            app.slowT = 0.12;
+            app.hitShake = HIT_SHAKE.time;
+            app.hitCam = { t: 0, x: e.x, z: e.z };
+            const now = performance.now() / 1000;
+            app.combo.n = now - app.combo.t < 6 ? app.combo.n + 1 : 1;
+            app.combo.t = now;
+            scenery.cheerT[0] = scenery.cheerT[1] = 1.6;
+            sound.bashi(); sound.hit(app.combo.n);
+            hitText(e.hp <= 1 ? 'あと1回!' : '');
+          } else sound.hit();
+          break;
+        }
+        case 'block': {
+          // 当たった直後の無敵の間: 玉ははじかれる
+          puff(e.x, e.y, e.z, 5, 0.5);
+          break;
+        }
         case 'hit': {
+          if (e.royale) {
+            // バトルロイヤルの脱落 (体力 0)
+            const v = views.players[e.player];
+            if (v) { v.outT = 0; const l = Math.hypot(e.vx || 0, e.vz || 0) || 1; v.kb = { x: (e.vx || 0) / l, z: (e.vz || 0) / l }; }
+            puff(e.x, e.y, e.z, 34, 2.0, 'red');
+            if (e.player === mine) {
+              app.shake = 0.6; sound.hit(); sound.out();
+              app.combo.n = 0;
+              els.banner.hidden = true;
+              hitText(`${e.place}位`, 'OUT!!', 1400);
+              app.outAt = performance.now();
+              sound.music(null);
+            } else if (e.by === mine) {
+              app.slowT = 0.2;
+              app.hitShake = HIT_SHAKE.time * 1.3;
+              app.hitCam = { t: 0, x: e.x, z: e.z };
+              scenery.cheerT[0] = scenery.cheerT[1] = 1.6;
+              sound.bashi(); sound.out();
+              const left = m.players.filter((q) => q.alive).length;
+              hitText(`${NAMES[e.player]}を倒した! ・ のこり${left}人`, 'OUT!!', 900);
+            } else {
+              const q = m.players[e.player];
+              if (q) popText(`${NAMES[e.player]} OUT`, q.x, 2.6, q.z, 1);
+              sound.hit();
+            }
+            break;
+          }
           { const q = app.match.players[e.player]; if (q) scenery.cheerT[1 - q.team] = 1.6; }   // 当てた側の観客が跳ねる
           const v = views.players[e.player];
           if (v) {
@@ -1016,6 +1317,16 @@
           els.banner.hidden = true;
           bigText([{ t: BIG_REASON[e.reason], cls: 'l1' }, { t: who, cls: 'l2' }, { t: `SET ${e.setNo} ・ ${e.points[0]} - ${e.points[1]} pt`, cls: 'info' }],
             e.winner === 0 ? 'blue' : e.winner === 1 ? 'red' : 'gray', (R.SET_OVER - 0.3) * 1000, 'result-text');
+          app.aim = null; els.throwPad.classList.remove('on');
+          break;
+        }
+        case 'royaleEnd': {
+          sound.music(null);
+          sound.whistle(true);
+          els.banner.hidden = true;
+          const winMe = e.winner === mine;
+          bigText([{ t: winMe ? '優勝!' : `${NAMES[e.winner]}の優勝`, cls: 'l1' }, { t: e.by === 'time' ? '時間切れ' : '最後の1人', cls: 'l2' }],
+            winMe ? 'blue' : 'gray', (R.SET_OVER - 0.3) * 1000, 'result-text');
           app.aim = null; els.throwPad.classList.remove('on');
           break;
         }
@@ -1061,6 +1372,8 @@
   function showResult() {
     const m = app.match;
     app.running = false;
+    sound.music(null);
+    if (m.mode === 'royale') { showRoyaleResult(m); return; }
     const kind = m.winner === 0 ? 'win' : m.winner === 1 ? 'lose' : 'draw';
     const title = kind === 'win' ? '勝利!' : kind === 'lose' ? '負け…' : '引き分け';
     els.resultTitle.textContent = title;
@@ -1079,7 +1392,12 @@
     if (m.decidedBy) rows.push(`<li class="by">${DECIDED[m.decidedBy]}で決着</li>`);
     els.resultSets.innerHTML = rows.join('');
     els.vResult.hidden = false;
-    // 勝ったら紙吹雪 (チームの色と金)。負けたら雪だけが降る
+    confetti(kind);
+    if (m.winner === 0) sound.win();
+  }
+
+  /** 勝ったら紙吹雪 (チームの色と金)。負けたら雪だけが降る */
+  function confetti(kind) {
     const cf = els.confetti; cf.innerHTML = '';
     const cols = kind === 'win' ? ['#2f6fe0', '#ffd34d', '#ffffff', '#5cc8ff', '#ff8a4c'] : ['#ffffff'];
     const n = kind === 'win' ? 46 : 22;
@@ -1094,7 +1412,30 @@
       el.style.animationDelay = (Math.random() * 1.6) + 's';
       cf.appendChild(el);
     }
-    if (m.winner === 0) sound.win();
+  }
+
+  /** バトルロイヤルの結果: 自分の順位を大きく、下に 8 人の順位 (色・名前・倒した数) */
+  function showRoyaleResult(m) {
+    const mine = m.human, place = m.players[mine].place || 8;
+    const kind = place === 1 ? 'win' : place <= 3 ? 'draw' : 'lose';
+    const title = place === 1 ? '優勝!' : `${place}位`;
+    els.resultTitle.textContent = title;
+    els.resultTitle.dataset.t = title;
+    els.vResult.classList.remove('win', 'lose', 'draw');
+    els.vResult.classList.add(kind);
+    const me0 = m.players[mine];
+    els.resultScore.innerHTML = `<div class="rank-big">${m.players.length}人中 ・ 倒した <b>${me0.kills}</b> 人</div>`;
+    const rows = m.ranking.map((id, i) => {
+      const q = m.players[id];
+      const you = id === mine;
+      return `<li class="rk p${i + 1}${you ? ' you' : ''}"><b class="pl">${i + 1}位</b><i class="chip" style="background:${teamHex(q.team)}"></i>` +
+        `<span class="nm">${NAMES[q.team]}${you ? '<small>あなた</small>' : ''}</span><span class="kl">${q.alive ? `のこり体力 ${q.hp}` : '脱落'} ・ 倒した ${q.kills}</span></li>`;
+    });
+    rows.push(`<li class="by">${m.decidedBy === 'time' ? '時間切れ (残った人は体力の多い順)' : '最後の1人で決着'}</li>`);
+    els.resultSets.innerHTML = rows.join('');
+    els.vResult.hidden = false;
+    confetti(kind);
+    if (place === 1) sound.win();
   }
 
   // ------------------------------------------------------------ 描く
@@ -1173,6 +1514,25 @@
   }
 
   function camTarget(p) {
+    if (app.match && app.match.mode === 'royale') {
+      // バトルロイヤル: 自分の真うしろ (南) の少し上から。会場が正方形なので横にも寄せて追う
+      const m = app.match;
+      // 決戦では寄る。見る所は自分と相手のまん中、高さは 2 人の離れ具合で決める (いちばん寄って FINAL 倍)
+      const foe = m.final && p && p.alive ? m.players.find((q) => q.alive && q.id !== p.id) : null;
+      if (foe) {
+        // 縦長の画面なので、横の離れ具合で決まることが多い (寄り f のとき、地面で見える幅は左右 5.8f m・上下 11f m ほど)
+        const dx = foe.x - p.x, dz = foe.z - p.z;
+        const f = clampN(Math.max((Math.abs(dx) / 2 + 1.6) / 5.8, (Math.abs(dz) / 2 + 2) / 11), ROYALE_CAM.final, 1);
+        // それでも入らないほど横に離れたら、自分が画面に残るように、まん中を自分の側へ寄せる
+        const kx = Math.max(0, 5.8 * f - 1.6) * 2;
+        const cx = p.x + clampN(dx, -kx, kx) / 2, cz = p.z + dz / 2;
+        const back = (ROYALE_CAM.back + ROYALE_CAM.ahead) * f;
+        return { pos: new T.Vector3(cx, ROYALE_CAM.h * f, cz + back), look: new T.Vector3(cx, 0, cz) };
+      }
+      const f = 1;
+      const x = p ? clampN(p.x, -12, 12) : 0, z = p ? clampN(p.z, -13, 13) : 0;
+      return { pos: new T.Vector3(x, ROYALE_CAM.h * f, z + ROYALE_CAM.back * f), look: new T.Vector3(x, 0, z - ROYALE_CAM.ahead * f) };
+    }
     const x = p ? p.x * 0.35 : 0;
     // あかの選手を追うとき (ビクトリースローのあかの番) は、反対側から見る
     const f = p && p.team === 1 && app.match && app.match.phase === 'vt' ? -1 : 1;
@@ -1191,6 +1551,7 @@
         if (!v) continue;
         // 退場: 倒れて消える
         if (!p.alive) {
+          if (v.hpSpr) v.hpSpr.visible = false;
           if (v.outT < 0) v.outT = 0;
           v.outT += dt;
           v.pose.rotation.x = Math.min(1, v.outT * 4) * -1.35;
@@ -1256,7 +1617,13 @@
           sm.visible = true;
           // 低いカメラでは壁に隠れやすい。自分と、狙っている相手だけは、壁に隠れたら透けて見せる
           const xray = (p.id === m.human || (app.lock && app.lock.target === p.id)) && hiddenByWall(p);
-          sm.material.opacity = xray ? 0.6 : 1;
+          // バトルロイヤル: 当たった直後の無敵の間は点滅、体力 1 は赤く脈うつ
+          const blink = p.inv > 0 && Math.floor(t * 14) % 2 === 0;
+          sm.material.opacity = xray ? 0.6 : blink ? 0.35 : 1;
+          if (v.hpSpr) {
+            const red = p.hp === 1 ? 0.5 + 0.5 * Math.sin(t * 10) : 0;
+            sm.material.color.setRGB(1, 1 - red * 0.55, 1 - red * 0.6);
+          }
           sm.material.depthTest = !xray;
           sm.renderOrder = xray ? 5 : 3;
           v.xray = xray;
@@ -1292,6 +1659,45 @@
         if (seen.has(id)) continue;
         scene.remove(v.mesh); scene.remove(v.shadow);
         views.balls.delete(id);
+      }
+
+      // 頭の上の体力 (バトルロイヤル)。自分は矢印の上に出す
+      for (let i = 0; i < m.players.length; i++) {
+        const p = m.players[i], v = views.players[i];
+        if (!v || !v.hpSpr || !p.alive) continue;
+        v.hpSpr.visible = true;
+        const tex = hpTex(Math.max(0, p.hp));
+        if (v.hpSpr.material.map !== tex) { v.hpSpr.material.map = tex; v.hpSpr.material.needsUpdate = true; }
+        const hurt = v.hurtT > 0 ? (v.hurtT -= dt, 1 + v.hurtT * 1.6) : 1;   // 減った瞬間に少しふくらむ
+        v.hpSpr.scale.set(1.05 * hurt, 0.35 * hurt, 1);
+        // 絵の板は見下ろしで縮むぶん縦に伸ばしてあるので、頭の高さもその分だけ上げる
+        const stretch = v.spr ? v.spr.mesh.scale.y : 1;
+        v.hpSpr.position.set(p.x, headTop(p) * stretch + (p.id === m.human ? 0.85 : 0.4), p.z);
+      }
+
+      // 画角はあそび方で替える
+      const fov = m.mode === 'royale' ? ROYALE_CAM.fov : CAM.fov;
+      if (camera.fov !== fov) { camera.fov = fov; camera.updateProjectionMatrix(); }
+      // 決戦: 縮んでいく会場のふちに赤い柵
+      const showZone = m.mode === 'royale' && !!m.final;
+      zone.visible = showZone;
+      if (showZone) {
+        const hw = C.ARENA.hw;
+        const H = R.ROYALE.HALF + 0.2, w = H - hw;   // 柵から、もとの会場のふちまで
+        zone.children.forEach((b, i) => {
+          if (i >= 4) return;
+          const along = i < 2;   // 0,1: 北と南 (x 方向に長い) / 2,3: 西と東
+          const sgn = i % 2 ? 1 : -1;
+          b.scale.set(along ? hw * 2 : 1, 1, along ? 1 : hw * 2);
+          b.position.set(along ? 0 : sgn * hw, 0.3, along ? sgn * hw : 0);
+        });
+        outside.forEach((pl, i) => {
+          const ns = i < 2, sgn = i % 2 ? 1 : -1;
+          pl.visible = w > 0.05;
+          pl.scale.set(ns ? H * 2 : w, ns ? w : hw * 2, 1);
+          pl.position.set(ns ? 0 : sgn * (hw + w / 2), 0.03, ns ? sgn * (hw + w / 2) : 0);
+        });
+        zoneMat.opacity = 0.45 + 0.25 * Math.sin(t * 6);
       }
 
       // 自分の印
@@ -1394,7 +1800,7 @@
       const q = m.players[app.lock.target];
       edgeMark(els.markLock, 'mkLock', q.x, 1.0, q.z, `狙い ${Math.round(Math.hypot(q.x - p.x, q.z - p.z))}m`);
     } else edgeMark(els.markLock, 'mkLock', null);
-    if (playing) {
+    if (playing && m.mode !== 'royale') {
       const f = C.flagPos(1 - p.team);
       edgeMark(els.markFlag, 'mkFlag', f.x, 2.0, f.z, `フラッグ ${Math.round(Math.hypot(f.x - p.x, f.z - p.z))}m`);
     } else edgeMark(els.markFlag, 'mkFlag', null);
@@ -1403,6 +1809,32 @@
   function updateHud() {
     const m = app.match;
     if (!m) return;
+    if (m.mode === 'royale') updateRoyaleHud(m); else updateTeamHud(m);
+    updatePadHud(m);
+  }
+
+  /** バトルロイヤルの帯: のこり人数 (色の点)・時間・自分の体力・倒した数 */
+  function updateRoyaleHud(m) {
+    const sec = Math.ceil(Math.max(0, m.time));
+    setText('rt', els.rTime, `${Math.floor(sec / 60)}:${String(sec % 60).padStart(2, '0')}`);
+    const hurry = sec <= 10 && m.phase === 'play';
+    if (app.hud.rhurry !== hurry) { app.hud.rhurry = hurry; els.rTime.classList.toggle('hurry', hurry); }
+    const alive = m.players.filter((q) => q.alive).length;
+    setText('ra', els.rAlive, String(alive));
+    setHTML('rd', els.rDots, m.players.map((q) => `<i class="${q.alive ? '' : 'out'}" style="background:${teamHex(q.team)}"></i>`).join(''));
+    const p = me();
+    const hp = p && p.alive ? p.hp : 0;
+    let hh = '';
+    for (let i = 0; i < R.ROYALE.HP; i++) hh += `<i class="${i < hp ? '' : 'lost'}"></i>`;
+    setHTML('rh', els.rHp, hh);
+    const danger = hp === 1 && m.phase === 'play';
+    if (app.hud.rdanger !== danger) { app.hud.rdanger = danger; els.rHp.classList.toggle('danger', danger); els.game.classList.toggle('hp-danger', danger); }
+    setText('rk', els.rKills, `倒した ${p ? p.kills : 0}`);
+    const fin = !!m.final;
+    if (app.hud.rfin !== fin) { app.hud.rfin = fin; els.rLabel.textContent = fin ? 'FINAL BATTLE' : 'BATTLE ROYALE'; els.rLabel.classList.toggle('final', fin); }
+  }
+
+  function updateTeamHud(m) {
     const sec = Math.ceil(Math.max(0, m.time));
     setText('time', els.time, `${Math.floor(sec / 60)}:${String(sec % 60).padStart(2, '0')}`);
     const hurry = sec <= 10 && m.phase === 'play';
@@ -1438,13 +1870,17 @@
       els.warn.hidden = !danger;
       app.centerLine.color.setHex(danger ? 0xff2a1a : 0xe86a62);
     }
+  }
+
+  /** 投げるボタンまわり (どちらのあそび方でも同じ) */
+  function updatePadHud(m) {
     const p = me();
     const balls = p ? p.balls : 0;
     let bh = '';
     for (let i = 0; i < R.MAX_CARRY; i++) bh += `<i class="${i < balls ? '' : 'none'}"></i>`;
     setHTML('mb', els.myBalls, bh);
     // 必殺ゲージ (当てると貯まる。満タンなら次の 1 球が大玉)
-    const sp = app.match ? app.match.sp[0] : 0;
+    const sp = p ? m.sp[p.team] || 0 : 0;
     const spq = Math.round(sp * 12) / 12;
     if (app.hud.sp !== spq) { app.hud.sp = spq; els.spGauge.style.setProperty('--sp', spq); els.throwPad.classList.toggle('super', sp >= 1); els.padLabel.textContent = sp >= 1 ? '大玉!' : '投げる'; }
     const empty = balls === 0;
@@ -1499,6 +1935,8 @@
       }
       if (n === 4) app.acc = 0;
       handleEvents();
+      // バトルロイヤルで脱落したら、OUT!! を見せてから残りを先へ進めて結果へ
+      if (app.running && app.outAt && performance.now() - app.outAt > 2600) { app.outAt = 0; finishRoyale(); }
     }
     if (app.bannerT > 0) {
       app.bannerT -= dt;
@@ -1523,6 +1961,7 @@
     if (!app.running) return;
     app.paused = on;
     els.vPause.hidden = !on;
+    sound.musicMute(on);
     if (on) {
       app.aim = null; app.stickTouch = null;
       app.input.mx = app.input.mz = 0; app.input.crouch = false;
@@ -1533,14 +1972,23 @@
 
   function toTitle() {
     app.running = false;
+    sound.music(null); sound.musicMute(false);
     app.paused = false;
     els.vPause.hidden = true;
     els.vResult.hidden = true;
     els.vTitle.hidden = false;
+    // 後ろに流すデモは、いつもチーム戦
+    if (!app.match || app.match.mode !== 'team' || app.match.human != null) {
+      app.match = C.createMatch({ seed: Date.now() >>> 0, human: null, skill: [0.55, 0.55] });
+      ensureField('team');
+      resetPlayers();
+    }
+    els.game.classList.remove('royale-mode', 'hp-danger');
+    app.hud = {};
   }
 
   function main() {
-    buildField();
+    ensureField('team');
     loadSprites();
     bindControls();
     // 投げ方のえらび (前に選んだ方を覚えておく)
@@ -1554,6 +2002,21 @@
       });
     });
     showMode();
+    // あそび方のえらび (チーム戦 / バトルロイヤル)。これも覚えておく
+    try { const v = localStorage.getItem('yukigassen.gameMode'); if (v === 'team' || v === 'royale') app.gameMode = v; } catch (err) { /* 覚えられなくても動く */ }
+    const TAGS = { team: '7対7 ・ 2セット先取 ・ 当たったら退場', royale: '8人 ・ 全員が敵 ・ 3回当たったら脱落' };
+    const showGMode = () => {
+      document.querySelectorAll('.gmode button').forEach((x) => x.classList.toggle('on', x.dataset.gmode === app.gameMode));
+      if (els.tagLine) els.tagLine.textContent = TAGS[app.gameMode];
+    };
+    document.querySelectorAll('.gmode button').forEach((b) => {
+      b.addEventListener('click', () => {
+        app.gameMode = b.dataset.gmode;
+        try { localStorage.setItem('yukigassen.gameMode', app.gameMode); } catch (err) { /* 覚えられなくても動く */ }
+        showGMode();
+      });
+    });
+    showGMode();
     els.btnStart.addEventListener('click', startMatch);
     els.btnAgain.addEventListener('click', startMatch);
     els.btnPause.addEventListener('click', () => pause(true));
@@ -1601,14 +2064,23 @@
       app,
       match: () => app.match,
       me,
-      start: (mode, seed) => {
+      start: (mode, seed, gmode) => {
         if (mode != null) app.aimMode = mode;
+        app.gameMode = gmode || 'team';
         startMatch();
         if (seed != null) {
-          app.match = C.createMatch({ seed, skill: [0.55, AI_SKILL], human: 1, aimMode: app.aimMode });
+          app.match = newMatch(seed);
           resetPlayers(); snapCamera(); handleEvents();
         }
       },
+      hpSprite: (id) => { const v = views.players[id]; return v && v.hpSpr ? { visible: v.hpSpr.visible, hp: app.match.players[id].hp, y: +v.hpSpr.position.y.toFixed(2) } : null; },
+      fieldMode: () => app.fieldMode,
+      music: () => sound.musicName(),
+      measureMusic: (name, sec) => sound.measureMusic(name, sec || 4),
+      zone: () => ({ visible: zone.visible, hw: C.ARENA.hw }),
+      camPos: () => camera.position.toArray().map((v) => +v.toFixed(2)),
+      fov: () => camera.fov,
+      walls: () => C.SHELTERS.length,
       project: (x, y, z) => {
         const v = new T.Vector3(x, y, z).project(camera);
         const r = els.canvas.getBoundingClientRect();

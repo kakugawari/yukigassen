@@ -36,6 +36,12 @@
         <span class="stockline" id="stockRed">雪玉 69</span>
       </div>
     </div>
+    <!-- バトルロイヤル: 残りの人数・時間・自分の体力 -->
+    <div class="rscore" id="royaleScore">
+      <div class="r-left"><b class="r-num" id="rAlive">8</b><span class="r-lab">人のこり</span><span class="r-dots" id="rDots"></span></div>
+      <div class="clock"><span class="time" id="rTime">3:00</span><span class="setno">BATTLE ROYALE</span></div>
+      <div class="r-right"><span class="r-hp" id="rHp"></span><span class="r-kills" id="rKills">倒した 0</span></div>
+    </div>
     <button type="button" class="pause" id="btnPause" aria-label="一時停止">Ⅱ</button>
   </div>
 
@@ -53,6 +59,7 @@
     </div>
   </div>
 
+  <div class="danger-edge" aria-hidden="true"></div>
   <div class="pops" id="pops"></div>
   <!-- 画面の外や上の帯の下にいる物の向き: 狙っている相手・相手のフラッグ -->
   <div class="edge-mark lock" id="markLock" hidden><i></i><span>狙い</span></div>
@@ -66,7 +73,11 @@
     <div class="title-card">
       <div class="logo">
         <h1 class="logo-img"><img src="./logo.webp" alt="" width="880" height="292" decoding="async"><span class="sr">雪合戦 スノーバトル</span></h1>
-        <p class="tag">7対7 ・ 2セット先取 ・ 当たったら退場</p>
+        <p class="tag" id="tagLine">7対7 ・ 2セット先取 ・ 当たったら退場</p>
+      </div>
+      <div class="gmode" role="group" aria-label="あそび方">
+        <button type="button" data-gmode="team" class="on"><b>チーム戦</b><small>7対7・フラッグ</small></button>
+        <button type="button" data-gmode="royale"><b>バトルロイヤル</b><small>8人・全員が敵</small></button>
       </div>
       <div class="diff" role="group" aria-label="投げ方">
         <button type="button" data-mode="easy" class="on"><i class="ico">⚡</i>かんたん<small>押すとすぐ投げる・玉が追う</small></button>
@@ -87,6 +98,7 @@
           <li><b>壁のすぐ裏</b>にいれば、正面からは当たらない(頭越しには狙われない)。壁の裏で投げると、<b>自動で横へのぞいて投げ、戻る</b>。のぞいている間は当たる</li>
         </ul>
         <p class="how">左側をなぞって移動。右下の<b>投げる</b>で、足もとに輪が出ている相手へ投げる。輪が<b>赤</b>なら当たるコース(灰色は壁に隠れている)。押したまま<b>相手の方へずらす</b>と、その相手を狙う。動きの先読みも、壁越しの山なりも自動。<br><b>かんたん</b>: 押すとすぐ投げ、玉が相手へ曲がっていく。<br><b>むずかしい</b>: 押さえている間に輪が締まり、<b>締まりきって赤</b>で離すと当たる(すぐ離すとぶれる)。構えている間は立つので、相手からも狙われる。<br><b>取り消し</b>: 押さえたまま外へ引っぱり、真ん中へ戻して離すと投げない。むずかしいでは、狙い続けると相手が壁の陰にしゃがむ(「サッ」)。立ち上がったあと少しの間はしゃがまないので、取り消して待ってから狙うのがコツ(フェイント)。<br><b>必殺の大玉</b>: 当てるとゲージが貯まり、2 回で満タン。次の 1 球が大玉になり、落ちた所のまわりの相手もアウト(壁の陰は助かる)。</p>
+        <p class="how"><b>バトルロイヤル</b>: 8人全員が敵。体力は<b>3</b>(頭の上の玉)。1回当たると青い雪、2回で赤く点滅(あと1回)、3回で脱落。当たった直後の約1秒は当たらない。3分たつか最後の1人になったら終わり(残っている人は体力の多い順)。雪玉はひとりずつ、いくらでも丸められる。</p>
       </details>
     </div>
   </section>

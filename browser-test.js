@@ -811,6 +811,84 @@ async function run() {
     await noImg.close();
     await phone.bringToFront();
 
+    // ------------------------------------------------ バトルロイヤル
+    section('バトルロイヤル');
+    {
+      const rp = await context.newPage();
+      await rp.goto(URL);
+      await rp.bringToFront();
+      await rp.waitForFunction(() => window.__app && window.__app.frames() > 2, null, { timeout: 15000 });
+      const gm = await rp.evaluate(() => [...document.querySelectorAll('.gmode button')].map((b) => ({ g: b.dataset.gmode, on: b.classList.contains('on') })));
+      ok(gm.length === 2 && gm[0].g === 'team' && gm[0].on && gm[1].g === 'royale' && !gm[1].on, `あそび方は チーム戦 / バトルロイヤル で、はじめはチーム戦 (${JSON.stringify(gm)})`);
+      await rp.click('.gmode button[data-gmode="royale"]');
+      ok(/全員が敵/.test(await rp.textContent('#tagLine')), 'バトルロイヤルを選ぶと、ロゴの下の説明が変わる');
+      const tfit = await rp.evaluate(() => { const r = document.getElementById('btnStart').getBoundingClientRect(); return r.bottom + 34 <= 932; });
+      ok(tfit, 'あそび方のえらびを足しても、試合開始が画面に収まる');
+      await rp.click('#btnStart');
+      const st = await rp.evaluate(() => {
+        const m = window.__app.match();
+        return { mode: m.mode, n: m.players.length, teams: new Set(m.players.map((p) => p.team)).size, human: m.human, field: window.__app.fieldMode(), walls: window.__app.walls(),
+          rs: getComputedStyle(document.getElementById('royaleScore')).display, sc: getComputedStyle(document.querySelector('.score')).display };
+      });
+      ok(st.mode === 'royale' && st.n === 8 && st.teams === 8 && st.human === 0, `8 人・全員ちがうチームで始まる (${JSON.stringify(st)})`);
+      ok(st.field === 'royale' && st.walls === 17, `会場がバトルロイヤル用に作り直される (壁 ${st.walls})`);
+      ok(st.rs === 'grid' && st.sc === 'none', '上の帯がバトルロイヤル用 (のこり人数・時間・体力) に替わる');
+      await rp.waitForFunction(() => window.__app.match().phase === 'play', null, { timeout: 30000 });
+      const band = await rp.evaluate(() => document.getElementById('royaleScore').getBoundingClientRect().bottom);
+      ok(band + 59 <= 120, `帯の下端 ${Math.round(band)} (安全域を足して ${Math.round(band + 59)}) はチーム戦と同じ高さ`);
+      await rp.waitForTimeout(600);
+      const hs = await rp.evaluate(() => [1, 2, 3, 4, 5, 6, 7].map((i) => window.__app.hpSprite(i)));
+      ok(hs.every((h) => h && h.visible && h.hp === 3 && h.y > 1.5), `相手の頭の上に体力が出る (${JSON.stringify(hs[0])})`);
+      const hud0 = await rp.evaluate(() => ({ alive: document.getElementById('rAlive').textContent, dots: document.querySelectorAll('#rDots i').length, hp: document.querySelectorAll('#rHp i:not(.lost)').length }));
+      ok(hud0.alive === '8' && hud0.dots === 8 && hud0.hp === 3, `帯に のこり 8 人・体力 3 (${JSON.stringify(hud0)})`);
+      // 自分が 2 回当たって体力 1: 帯の体力が点滅し、画面のふちが赤くなる
+      await rp.evaluate(() => { window.__app.match().players[0].hp = 1; });
+      await rp.waitForTimeout(400);
+      const dg = await rp.evaluate(() => ({ cls: document.getElementById('game').classList.contains('hp-danger'), blink: document.getElementById('rHp').classList.contains('danger'), hp: document.querySelectorAll('#rHp i:not(.lost)').length }));
+      ok(dg.cls && dg.blink && dg.hp === 1, `体力 1 で帯が点滅し、画面のふちが赤い (${JSON.stringify(dg)})`);
+      // 相手の体力が減ると、頭の上の絵も減る
+      await rp.evaluate(() => { window.__app.match().players[4].hp = 1; });
+      await rp.waitForTimeout(400);
+      ok((await rp.evaluate(() => window.__app.hpSprite(4).hp)) === 1, '相手の体力が減ると頭の上の体力も減る');
+      // 自分が当てた (脱落ではない): HIT!!
+      await rp.evaluate(() => { const m = window.__app.match(); const q = m.players[4]; m.events.push({ type: 'hurt', player: 4, hp: 1, by: 0, x: q.x, y: 1, z: q.z }); });
+      await rp.waitForTimeout(120);
+      ok(await rp.evaluate(() => [...document.querySelectorAll('.big-text')].some((e) => /HIT!!/.test(e.textContent))), '自分が当てると HIT!!');
+      await rp.waitForTimeout(700);
+      // 自分が脱落: OUT!! と順位、そのあと残りを先へ進めて結果
+      await rp.evaluate(() => {
+        const m = window.__app.match(); const p = m.players[0];
+        p.hp = 0; p.alive = false; m.out.push(0); p.place = m.players.filter((q) => q.alive).length + 1;
+        m.events.push({ type: 'hit', player: 0, by: 1, royale: true, place: p.place, x: p.x, y: 1, z: p.z, vx: 0, vz: 1 });
+      });
+      await rp.waitForTimeout(150);
+      ok(await rp.evaluate(() => [...document.querySelectorAll('.big-text')].some((e) => /OUT!!/.test(e.textContent) && /8位/.test(e.textContent))), '自分が脱落すると OUT!! と順位 (8位)');
+      await rp.waitForFunction(() => !document.getElementById('vResult').hidden, null, { timeout: 60000 });
+      const res = await rp.evaluate(() => ({
+        title: document.getElementById('resultTitle').textContent,
+        rows: document.querySelectorAll('#resultSets li.rk').length,
+        you: document.querySelector('#resultSets li.rk.you') && document.querySelector('#resultSets li.rk.you .pl').textContent,
+        ranking: window.__app.match().ranking.slice()
+      }));
+      ok(res.title === '8位' && res.rows === 8 && res.you === '8位' && new Set(res.ranking).size === 8, `結果に 8 人の順位 (${res.title}・${res.rows} 行・あなた ${res.you})`);
+      // タイトルへ戻ると、後ろのデモはチーム戦の会場に戻る。えらんだあそび方は覚えている
+      await rp.click('#btnToTitle');
+      await rp.waitForTimeout(300);
+      const back = await rp.evaluate(() => ({ field: window.__app.fieldMode(), walls: window.__app.walls(), n: window.__app.match().players.length, cls: document.getElementById('game').className }));
+      ok(back.field === 'team' && back.walls === 7 && back.n === 14 && !/royale-mode|hp-danger/.test(back.cls), `タイトルの後ろはチーム戦の会場に戻る (${JSON.stringify(back)})`);
+      await rp.reload();
+      await rp.waitForFunction(() => window.__app && window.__app.frames() > 2, null, { timeout: 15000 });
+      ok(await rp.evaluate(() => document.querySelector('.gmode button.on').dataset.gmode) === 'royale', '開き直しても、えらんだあそび方 (バトルロイヤル) を覚えている');
+      // ほかの確かめに残さない
+      await rp.click('.gmode button[data-gmode="team"]');
+      // チーム戦に戻して始めると、壁も人数も元どおり
+      await rp.click('#btnStart');
+      const tm = await rp.evaluate(() => ({ mode: window.__app.match().mode, n: window.__app.match().players.length, walls: window.__app.walls(), field: window.__app.fieldMode(), hp: window.__app.hpSprite(3) }));
+      ok(tm.mode === 'team' && tm.n === 14 && tm.walls === 7 && tm.field === 'team' && tm.hp === null, `チーム戦に戻すと 7 対 7・壁 7 基・頭の上の体力なし (${JSON.stringify(tm)})`);
+      await rp.close();
+      await phone.bringToFront();
+    }
+
     // ------------------------------------------------ 遅い端末
     section('遅い端末 (CPU 4 倍遅)');
     const cdp = await context.newCDPSession(phone);
@@ -819,6 +897,14 @@ async function run() {
       // 描画 (GPU) をのぞいた、1 コマぶんのロジックの時間 (14 人の AI が全員動く)
       const C = window.Core;
       const m = C.createMatch({ seed: 3, human: null });
+      m.phase = 'play';
+      const t0 = performance.now();
+      for (let i = 0; i < 600; i++) C.step(m, 1 / 60);
+      return (performance.now() - t0) / 600;
+    });
+    const perfR = await phone.evaluate(() => {
+      const C = window.Core;
+      const m = C.createMatch({ mode: 'royale', seed: 3, human: null });
       m.phase = 'play';
       const t0 = performance.now();
       for (let i = 0; i < 600; i++) C.step(m, 1 / 60);
@@ -842,6 +928,7 @@ async function run() {
     await cdp.send('Emulation.setCPUThrottlingRate', { rate: 1 });
     ok(aimCost.n === 200 && aimCost.ms < 3, `狙いの補助 1 コマ ${aimCost.ms.toFixed(2)}ms (壁の陰の相手)`);
     ok(perf < 4, `ロジック 1 コマ ${perf.toFixed(2)}ms (16.7ms の枠に十分収まる)`);
+    ok(perfR < 4, `バトルロイヤルのロジック 1 コマ ${perfR.toFixed(2)}ms (8 人が全員を敵として見る)`);
     const info = await phone.evaluate(() => window.__app.info());
     ok(info.calls < 260, `描画の呼び出し ${info.calls} 回 / 三角形 ${info.tris}`);
 

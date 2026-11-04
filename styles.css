@@ -503,3 +503,59 @@ body:has(#vTitle:not([hidden])) .controls { visibility: hidden; }
 .edge-mark.lock span { background: #ff3b30; }
 .edge-mark.flag { color: var(--red); }
 .edge-mark.flag span { background: var(--red); }
+
+/* ------------------------------------------------ バトルロイヤル */
+/* タイトル: あそび方のえらび (チーム戦 / バトルロイヤル) */
+.gmode { display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px; }
+.gmode button {
+  border: 2px solid rgba(255, 255, 255, .28); background: rgba(10, 30, 70, .45); border-radius: 14px;
+  padding: 7px 6px; color: #fff; line-height: 1.2;
+  -webkit-backdrop-filter: blur(6px); backdrop-filter: blur(6px);
+}
+.gmode button b { display: block; font-size: 16px; font-weight: 900; font-style: italic; }
+.gmode button small { display: block; font-size: 10.5px; font-weight: 700; opacity: .8; margin-top: 2px; }
+.gmode button.on {
+  border-color: #ffd34d; background: linear-gradient(#ff8a4c, #d8362a);
+  box-shadow: 0 0 0 3px rgba(255, 211, 77, .35), 0 0 22px rgba(255, 110, 60, .55);
+}
+.gmode button[data-gmode="team"].on { background: linear-gradient(#3f86ff, #1d4fb0); box-shadow: 0 0 0 3px rgba(255, 211, 77, .35), 0 0 22px rgba(80, 150, 255, .6); }
+
+/* 上の帯: チーム戦の帯と同じ大きさ (高さ 50) */
+.rscore {
+  display: none;
+  grid-template-columns: 1fr auto 1fr; align-items: center; gap: 6px;
+  background: var(--panel); border-radius: 14px; padding: 4px 10px;
+  box-shadow: 0 2px 10px rgba(30, 60, 100, .18);
+  margin-right: 44px; height: 50px; line-height: 1;
+}
+#game.royale-mode .score { display: none; }
+#game.royale-mode .rscore { display: grid; }
+.r-left { display: grid; grid-template-columns: auto auto; column-gap: 3px; row-gap: 3px; align-items: end; justify-content: start; }
+.r-num { font-size: 22px; font-weight: 900; font-style: italic; color: #d8362a; font-variant-numeric: tabular-nums; }
+.r-lab { font-size: 10px; font-weight: 800; color: #5b6b85; padding-bottom: 3px; }
+.r-dots { grid-column: 1 / -1; display: flex; gap: 2px; }
+.r-dots i { width: 7px; height: 9px; border-radius: 3px; display: block; }
+.r-dots i.out { background: #c6ccd6 !important; }
+.r-right { display: grid; justify-items: end; gap: 4px; }
+.r-hp { display: flex; gap: 3px; }
+.r-hp i { width: 14px; height: 14px; border-radius: 50%; display: block; background: #fff; border: 2px solid #3f86ff; box-shadow: inset 0 -2px 0 rgba(80, 130, 200, .35); }
+.r-hp i.lost { background: #d7dde6; border-color: #b8c1ce; box-shadow: none; }
+.r-hp.danger i:not(.lost) { border-color: #e8322a; background: #ffd9d4; animation: hpBlink .5s steps(2) infinite; }
+@keyframes hpBlink { 50% { opacity: .35; } }
+.r-kills { font-size: 10px; font-weight: 800; color: #5b6b85; font-variant-numeric: tabular-nums; }
+
+/* 体力 1 (あと 1 回で脱落): 画面のふちが赤く脈うつ */
+.danger-edge { position: absolute; inset: 0; pointer-events: none; box-shadow: inset 0 0 46px 16px rgba(235, 30, 20, .8); opacity: 0; }
+#game.hp-danger .danger-edge { animation: edgePulse 1s ease-in-out infinite; }
+@keyframes edgePulse { 0%, 100% { opacity: .45; } 50% { opacity: 1; } }
+
+/* 結果: 順位の表 */
+.rank-big { grid-column: 1 / -1; color: #fff; font-weight: 900; font-size: 20px; font-style: italic; }
+.rank-big b { font-size: 34px; color: #ffd34d; }
+.sets-list li.rk { display: grid; grid-template-columns: 34px 14px 1fr auto; gap: 8px; align-items: center; text-align: left; padding: 7px 10px; }
+.sets-list li.rk .pl { font-style: italic; font-size: 17px; color: #6b778a; }
+.sets-list li.rk.p1 .pl { color: #c58a00; }
+.sets-list li.rk .chip { width: 14px; height: 14px; border-radius: 50%; display: block; }
+.sets-list li.rk .kl { font-size: 12px; color: #6b778a; }
+.sets-list li.rk.you { box-shadow: 0 0 0 3px #ffd34d; }
+.sets-list li.rk .nm small { font-size: 10px; color: #c58a00; margin-left: 4px; }

@@ -1,7 +1,7 @@
 {
   "name": "yukigassen",
   "version": "1.0.0",
-  "description": "雪合戦 フラッグ7 — 7対7のスポーツ雪合戦 (スマホ向け 3D)",
+  "description": "スノーバトル — 7対7のスポーツ雪合戦 (スマホ向け 3D)",
   "private": true,
   "scripts": {
     "start": "node serve.js",

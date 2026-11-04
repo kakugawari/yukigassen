@@ -321,6 +321,11 @@ h1 b em::before {
 .tag { margin: 0; font-size: 13px; font-weight: 800; color: rgba(255, 255, 255, .85); letter-spacing: .06em; text-shadow: 0 1px 4px rgba(0, 0, 0, .6); }
 h2 { margin: 0; font-size: 30px; }
 
+/* ロゴの絵 (logo.webp)。前の字の題字 (h1 span / h1 b) の決まりは、この h1 には効かせない */
+h1.logo-img { display: block; position: relative; }
+h1.logo-img img { display: block; width: 104%; margin-left: -2%; height: auto; filter: drop-shadow(0 8px 16px rgba(0, 0, 0, .45)); animation: logoIn .7s cubic-bezier(.2, 1.4, .4, 1) both; }
+@keyframes logoIn { from { transform: scale(.6) rotate(-4deg); opacity: 0; } to { transform: none; opacity: 1; } }
+.sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
 /* 降る雪 (タイトルだけ。transform だけを動かす) */
 .snow { position: absolute; inset: 0; pointer-events: none; overflow: hidden; }
 .snow i {

@@ -118,13 +118,17 @@ async function run() {
     ok(fit.title.includes('雪合戦'), `タイトルが出ている (${fit.title})`);
     // タイトルの見た目: 題字が画面の幅に収まる・雪が降る・後ろのカメラがコートのまわりを回る
     const look = await phone.evaluate(async () => {
-      const r = document.querySelector('h1 b').getBoundingClientRect();
+      const img = document.querySelector('h1.logo-img img');
+      await img.decode().catch(() => {});
+      await new Promise((res) => setTimeout(res, 800));      // 飛び出す動きが終わるまで
+      const r = img.getBoundingClientRect();
       const p0 = window.__app.camInfo().pos;
       await new Promise((res) => setTimeout(res, 1500));
       const p1 = window.__app.camInfo().pos;
-      return { l: Math.round(r.left), r: Math.round(r.right), snow: document.querySelectorAll('#vTitle .snow i').length, moved: Math.hypot(p1[0] - p0[0], p1[2] - p0[2]) };
+      return { l: Math.round(r.left), r: Math.round(r.right), w: img.naturalWidth, src: img.currentSrc.slice(-10), snow: document.querySelectorAll('#vTitle .snow i').length, moved: Math.hypot(p1[0] - p0[0], p1[2] - p0[2]), doc: document.title };
     });
-    ok(look.l >= 0 && look.r <= 430, `題字「フラッグ7」が画面の幅に収まる (${look.l}〜${look.r})`);
+    ok(look.w > 0 && look.l >= -10 && look.r <= 440 && look.r - look.l > 360, `ロゴの絵が読めて、画面の幅いっぱいに収まる (${look.l}〜${look.r}・元の幅 ${look.w}px)`);
+    ok(look.doc === 'スノーバトル', `アプリの名前がスノーバトル (${look.doc})`);
     ok(look.snow >= 20, `タイトルに雪が降る (${look.snow} 粒)`);
     ok(look.moved > 0.2, `タイトルの後ろでカメラがコートのまわりを回る (1.5 秒で ${look.moved.toFixed(2)}m)`);
     // ホーム画面のアイコン: iOS は SVG を使えないので PNG (180x180)。読めて、大きさが合っている
@@ -560,10 +564,11 @@ async function run() {
     const foul = await phone.evaluate(() => ({ r: window.__app.match().setResults.slice(-1)[0], ban: document.getElementById('banner').textContent }));
     ok(foul.r && foul.r.reason === 'over' && foul.r.winner === 1, `4 人目が入るとセット負け (${foul.ban})`);
     // 前の確かめでセットが終わっていると、ここで試合が決まることがある。そのときは新しい試合で続ける
-    await phone.waitForFunction(() => window.__app.match().phase === 'play' || !document.getElementById('vResult').hidden, null, { timeout: 10000 });
+    // (セットの終わり 3 秒 + 秒読み 2 秒。この機械では試合の時間が実時間の半分ほどで進むので、上限は長めに)
+    await phone.waitForFunction(() => window.__app.match().phase === 'play' || !document.getElementById('vResult').hidden, null, { timeout: 20000 });
     if (await phone.evaluate(() => !document.getElementById('vResult').hidden)) {
       await phone.click('#btnAgain');
-      await phone.waitForFunction(() => window.__app.match().phase === 'play', null, { timeout: 10000 });
+      await phone.waitForFunction(() => window.__app.match().phase === 'play', null, { timeout: 20000 });
     }
 
     // ---- ビクトリースロー

@@ -62,7 +62,9 @@
     COUNTDOWN: 2.0,
     SET_OVER: 3.0,
     // バトルロイヤル (公式に無い別のモード): 8 人全員が敵。30m 四方。3 分。3 回当たると脱落
-    ROYALE: { N: 8, HALF: 15, TIME: 180, HP: 3, INV: 1.0, SPAWN_R: 13.2 },
+    ROYALE: { N: 8, HALF: 15, TIME: 180, HP: 3, INV: 1.0, SPAWN_R: 13.2,
+      // 決戦 (残り 2 人): 会場が FINAL_HALF 四方まで FINAL_SHRINK 秒で縮み、真ん中へ寄せる。残り時間は少なくとも FINAL_TIME 秒にする
+      FINAL_HALF: 8, FINAL_SHRINK: 6, FINAL_TIME: 30 },
     FORWARDS: 4,
     BACKS: 3
   };
@@ -130,12 +132,20 @@
   const ARENA = { mode: 'team', hw: R.HALF_W, hl: R.HALF_L };
   function useArena(m) {
     const mode = m && m.mode === 'royale' ? 'royale' : 'team';
+    if (mode === 'royale') ARENA.hw = ARENA.hl = royaleHalf(m);
     if (ARENA.mode === mode) return;
     ARENA.mode = mode;
     SHELTERS.length = 0;
     SHELTERS.push(...(mode === 'royale' ? ROYALE_SHELTERS : TEAM_SHELTERS));
-    ARENA.hw = mode === 'royale' ? R.ROYALE.HALF : R.HALF_W;
-    ARENA.hl = mode === 'royale' ? R.ROYALE.HALF : R.HALF_L;
+    ARENA.hw = mode === 'royale' ? royaleHalf(m) : R.HALF_W;
+    ARENA.hl = mode === 'royale' ? royaleHalf(m) : R.HALF_L;
+  }
+  /** バトルロイヤルの会場の半分の広さ。決戦が始まると、なめらかに縮む */
+  function royaleHalf(m) {
+    const f = m && m.final;
+    if (!f) return R.ROYALE.HALF;
+    const k = Math.min(1, f.t / R.ROYALE.FINAL_SHRINK), e = k * k * (3 - 2 * k);
+    return R.ROYALE.HALF + (R.ROYALE.FINAL_HALF - R.ROYALE.HALF) * e;
   }
 
   function flagPos(team) { return { x: 0, z: side(team) * R.FLAG_U }; }
@@ -220,6 +230,7 @@
     m.balls = [];
     m.players = [];
     m.out = [];          // 脱落した順
+    m.final = null;      // 決戦 (残り 2 人) が始まったら { t: 経った秒, ids }
     for (let i = 0; i < N; i++) {
       const a = (i + 0.5) / N * Math.PI * 2;
       const p = newPlayer(i, i, 'F', i + 1, Math.sin(a) * R.ROYALE.SPAWN_R, Math.cos(a) * R.ROYALE.SPAWN_R);
@@ -920,14 +931,17 @@
     const nearest = (x, z) => enemies.reduce((a, q) => (dist(x, z, q) < dist(x, z, a) ? q : a), enemies[0]);
     const nq = nearest(p.x, p.z);
     const danger = dist(p.x, p.z, nq) < 3;
+    const inZone = (x, z) => Math.abs(x) < ARENA.hw - 0.6 && Math.abs(z) < ARENA.hl - 0.6;
+    if (ai.goal && !inZone(ai.goal.x, ai.goal.z)) ai.goal = null;     // 決戦で会場が縮んだ: 外になった行き先は選び直す
     if (ai.goal) {
       const there = Math.hypot(ai.goal.x - p.x, ai.goal.z - p.z) < 0.35;
-      if (there && !ai.arrived) { ai.arrived = true; ai.holdT = lerp(4, 2, s) + m.rng() * 2.5; }
+      if (there && !ai.arrived) { ai.arrived = true; ai.holdT = (lerp(4, 2, s) + m.rng() * 2.5) * (m.final ? 0.5 : 1); }
       if (!danger && (!there || ai.holdT > 0)) return;
     }
-    const scared = p.balls === 0 || p.hp <= 1;
+    const scared = !m.final && (p.balls === 0 || p.hp <= 1);    // 一騎打ちでは逃げない
     let best = null, bestS = Infinity;
     for (const sp of royaleSpots()) {
+      if (!inZone(sp.x, sp.z)) continue;
       const travel = Math.hypot(sp.x - p.x, sp.z - p.z);
       if (travel > 16) continue;
       const e = nearest(sp.x, sp.z);
@@ -940,7 +954,9 @@
         if (dq < 15 && ((q.x - sp.x) * sp.nx + (q.z - sp.z) * sp.nz) < 0) covered++;
       }
       const taken = m.players.some((o) => o !== p && o.alive && Math.hypot(o.x - sp.x, o.z - sp.z) < 0.8);
-      const score = travel * 0.45 + (scared ? -Math.min(de, 16) * 0.7 : Math.abs(de - 8) * 0.6) -
+      // 一騎打ちでは、撃ち合う距離を詰める (6m)。粘る時間も短くする (下の holdT)
+      const want = m.final ? 6 : 8;
+      const score = travel * 0.45 + (scared ? -Math.min(de, 16) * 0.7 : Math.abs(de - want) * 0.6) -
         covered * 1.6 + crowd * 3 + (taken ? 6 : 0) + m.rng() * 1.5;
       if (score < bestS) { bestS = score; best = sp; }
     }
@@ -954,6 +970,12 @@
   /** 残り 1 人か時間切れで決着。順位: 残っている人 (体力・倒した数の順) → あとで脱落した人ほど上 */
   function checkRoyaleEnd(m) {
     const alive = m.players.filter((p) => p.alive);
+    // 残り 2 人で決戦 (FINAL BATTLE): 会場が縮み、時間は少なくとも 30 秒残す
+    if (alive.length === 2 && m.time > 0 && !m.final) {
+      m.final = { t: 0, ids: alive.map((p) => p.id) };
+      m.time = Math.max(m.time, R.ROYALE.FINAL_TIME);
+      m.events.push({ type: 'final', ids: m.final.ids.slice() });
+    }
     if (alive.length > 1 && m.time > 0) return;
     m.time = Math.max(0, m.time);
     alive.sort((a, b) => b.hp - a.hp || b.kills - a.kills || a.id - b.id);
@@ -1383,7 +1405,7 @@
     }
     separate(m.players);
     stepBalls(m, dt);
-    if (m.mode === 'royale') checkRoyaleEnd(m);
+    if (m.mode === 'royale') { if (m.final) m.final.t += dt; checkRoyaleEnd(m); }
     else { handOver(m); checkSetEnd(m); }
     return m;
   }

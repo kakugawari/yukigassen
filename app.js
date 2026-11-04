@@ -7,7 +7,7 @@
   const C = window.Core;
   const R = C.R;
   const T = window.THREE;
-  const VERSION = 'v18';
+  const VERSION = 'v19';
   const AI_SKILL = 0.5;      // 相手の強さ (前の「ふつう」)。強さのえらびはやめ、投げ方をえらぶ
   const AUTO_CROUCH = 0.2;
   const CANCEL = { out: 40, back: 18 };   // 投げるボタン: 40px 以上引っぱってから 18px 以内へ戻して離すと取り消し   // 止まってからしゃがむまで (秒)
@@ -36,7 +36,7 @@
     btnStart: $('btnStart'), btnPause: $('btnPause'), btnResume: $('btnResume'), btnQuit: $('btnQuit'),
     btnAgain: $('btnAgain'), btnToTitle: $('btnToTitle'), resultTitle: $('resultTitle'), resultSets: $('resultSets'),
     ver: $('ver'), tagLine: $('tagLine'),
-    rAlive: $('rAlive'), rDots: $('rDots'), rTime: $('rTime'), rHp: $('rHp'), rKills: $('rKills')
+    rAlive: $('rAlive'), rDots: $('rDots'), rTime: $('rTime'), rHp: $('rHp'), rKills: $('rKills'), rLabel: $('rLabel')
   };
 
   // 0 あお・1 あか はチーム戦と同じ。2〜7 はバトルロイヤルの色 (絵は、あおの青い所を塗り替えて作る)
@@ -50,7 +50,9 @@
 
   const NAMES = ['あお', 'あか', 'みどり', 'きいろ', 'むらさき', 'もも', 'だいだい', 'みずいろ'];
   const RECOLOR = { 2: { h: 128 }, 3: { h: 46, v: 1.12 }, 4: { h: 276 }, 5: { h: 330, s: 0.62, v: 1.15 }, 6: { h: 24 }, 7: { h: 190, s: 0.75, v: 1.1 } };
-  const ROYALE_CAM = { h: 9.5, back: 8.5, ahead: 5 };   // バトルロイヤルは前後左右に敵がいるので、チーム戦より少し高く・手前も広く見る
+  // バトルロイヤル: いちばん初めの高いカメラ (21m 上・10m 後ろ・5m 先、画角 52°)。前後左右に敵がいるので、低いカメラでは死角から当てられた。
+// 決戦 (残り 2 人) では FINAL 倍まで寄る
+const ROYALE_CAM = { h: 21, back: 10, ahead: 5, fov: 52, final: 0.72 };
   const teamHex = (t) => '#' + COLORS.team[t].toString(16).padStart(6, '0');
 
   // ------------------------------------------------------------ 状態
@@ -111,6 +113,24 @@
     }, undefined, () => { app.tex.failed++; });
     return mat;
   }
+
+  // 決戦の柵 (4 本の細い箱。毎コマ、縮んだ会場の大きさに合わせる)
+  const zoneMat = new T.MeshBasicMaterial({ color: 0xff3020, transparent: true, opacity: 0.6, depthWrite: false });
+  const zone = new T.Group();
+  for (let i = 0; i < 4; i++) {
+    const g = i < 2 ? new T.BoxGeometry(1, 0.6, 0.12) : new T.BoxGeometry(0.12, 0.6, 1);
+    zone.add(new T.Mesh(g, zoneMat));
+  }
+  // 柵の外の地面を赤く沈める (入れない所が分かるように)。4 枚の板: 北・南・西・東
+  const outMat = new T.MeshBasicMaterial({ color: 0xc02818, transparent: true, opacity: 0.22, depthWrite: false });
+  const outside = [];
+  for (let i = 0; i < 4; i++) {
+    const pl = new T.Mesh(new T.PlaneGeometry(1, 1), outMat);
+    pl.rotation.x = -Math.PI / 2; pl.renderOrder = 1;
+    zone.add(pl); outside.push(pl);
+  }
+  zone.visible = false;
+  scene.add(zone);
 
   // 会場 (地面・線・壁・景色) は、モードが変わったら作り直す。作った物は全部 fieldRoot の下にまとめる
   const fieldRoot = new T.Group();
@@ -902,8 +922,124 @@
       for (let i = 0; i < x.length; i++) { const v = Math.abs(x[i]); if (v > peak) peak = v; sum += x[i] * x[i]; }
       return { peak, rms: Math.sqrt(sum / x.length) };
     }
+    // ---------------- BGM (バトルロイヤルだけ)。16 分音符の歩みで、少し先まで予約して鳴らす
+    // 曲: 和音の根音 (midi) と長短、1 小節 16 歩。bass / arp / drum の作りは曲ごと
+    const SONGS = {
+      royale: { bpm: 124, roots: [45, 41, 48, 43], minor: [1, 0, 0, 0], vol: 1 },
+      final: { bpm: 158, roots: [50, 46, 48, 45], minor: [1, 0, 0, 0], vol: 1 }
+    };
+    const hz = (n) => 440 * Math.pow(2, (n - 69) / 12);
+    function vnote(ac, out, t, freq, dur, vol, type, cutoff) {
+      const o = ac.createOscillator(); o.type = type; o.frequency.setValueAtTime(freq, t);
+      const g = ac.createGain();
+      g.gain.setValueAtTime(0.0001, t);
+      g.gain.exponentialRampToValueAtTime(vol, t + 0.008);
+      g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+      let node = o;
+      if (cutoff) { const f = ac.createBiquadFilter(); f.type = 'lowpass'; f.frequency.value = cutoff; o.connect(f); node = f; }
+      node.connect(g); g.connect(out);
+      o.start(t); o.stop(t + dur + 0.03);
+    }
+    function vnoise(ac, out, buf, t, dur, freq, type, vol) {
+      const src = ac.createBufferSource(); src.buffer = buf;
+      const f = ac.createBiquadFilter(); f.type = type; f.frequency.value = freq;
+      const g = ac.createGain();
+      g.gain.setValueAtTime(vol, t);
+      g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+      src.connect(f); f.connect(g); g.connect(out);
+      src.start(t); src.stop(t + dur + 0.02);
+    }
+    function kick(ac, out, t, vol) {
+      const o = ac.createOscillator(); o.type = 'sine';
+      o.frequency.setValueAtTime(150, t); o.frequency.exponentialRampToValueAtTime(45, t + 0.12);
+      const g = ac.createGain(); g.gain.setValueAtTime(vol, t); g.gain.exponentialRampToValueAtTime(0.0001, t + 0.18);
+      o.connect(g); g.connect(out); o.start(t); o.stop(t + 0.2);
+    }
+    /** 曲 name の i 歩目を、時刻 t に予約する */
+    function musicStep(ac, out, buf, name, i, t) {
+      const S = SONGS[name], st = i % 16, bar = Math.floor(i / 16) % S.roots.length;
+      const r = S.roots[bar], third = S.minor[bar] ? 3 : 4;
+      const sp = 60 / S.bpm / 4;
+      const chord = [0, third, 7, 12, 7, third];
+      if (name === 'royale') {
+        // 軽い: 8 分のベース (裏はオクターブ上)・三角波の分散和音・キックとハイハットは控えめ
+        if (st % 2 === 0) vnote(ac, out, t, hz(r - 12 + (st % 4 === 2 ? 12 : 0)), sp * 1.8, 0.16, 'triangle');
+        if (st % 2 === 0) vnote(ac, out, t, hz(r + 12 + chord[(st / 2) % chord.length]), sp * 1.6, 0.05, 'square', 2400);
+        if (st % 8 === 0) kick(ac, out, t, 0.32);
+        if (st % 4 === 2) vnoise(ac, out, buf, t, 0.04, 7000, 'highpass', 0.05);
+      } else {
+        // 決戦: 速く、16 分で刻むベース・のこぎり波の駆け上がり・4 つ打ちとスネア
+        vnote(ac, out, t, hz(r - 12 + (st % 2 ? 12 : 0)), sp * 0.9, 0.12, 'sawtooth', 900);
+        const run = [0, third, 7, 12, 15, 12, 7, third];
+        if (st % 2 === 0) vnote(ac, out, t, hz(r + 12 + run[(st / 2) % run.length] + (bar === 3 && st >= 8 ? 2 : 0)), sp * 1.7, 0.045, 'square', 3200);
+        if (st === 0) vnote(ac, out, t, hz(r + 24), sp * 7, 0.035, 'sawtooth', 2600);
+        if (st % 4 === 0) kick(ac, out, t, 0.4);
+        if (st === 4 || st === 12) vnoise(ac, out, buf, t, 0.12, 1800, 'bandpass', 0.22);
+        if (st % 2 === 1) vnoise(ac, out, buf, t, 0.03, 8000, 'highpass', 0.06);
+      }
+    }
+    const MUSIC_LEVEL = 0.75;   // 曲の平均 0.013〜0.018・最大 0.14〜0.16 (効果音のバシッ 0.30 より小さく、ずっと鳴るので控えめ)
+    const mus = { name: null, bus: null, step: 0, nextT: 0, timer: null, muted: false };
+    function music(name) {
+      if (!ctx) return;
+      if (mus.name === name) return;
+      const now = ctx.currentTime;
+      if (mus.bus) {
+        // いまの大きさから落とす (値を読まない。読むと予約した値が見えず、バチッと鳴ることがある)
+        const old = mus.bus;
+        old.gain.cancelScheduledValues(now); old.gain.setTargetAtTime(0, now, 0.08);
+        setTimeout(() => old.disconnect(), 800);
+      }
+      mus.name = name; mus.bus = null;
+      if (!name) return;
+      mus.bus = ctx.createGain();
+      mus.bus.gain.value = mus.muted ? 0 : MUSIC_LEVEL;
+      mus.bus.connect(master);
+      mus.step = 0; mus.nextT = now + 0.06;
+      if (!mus.timer) mus.timer = setInterval(pump, 40);
+    }
+    function pump() {
+      if (!ctx || !mus.name || !mus.bus) return;
+      const sp = 60 / SONGS[mus.name].bpm / 4;
+      if (mus.nextT < ctx.currentTime - 0.5) mus.nextT = ctx.currentTime + 0.05;   // 止まっていた (裏へ回った) あとは追いつかせない
+      while (mus.nextT < ctx.currentTime + 0.18) {
+        musicStep(ctx, mus.bus, noise, mus.name, mus.step, mus.nextT);
+        mus.step++; mus.nextT += sp;
+      }
+    }
+    function musicMute(on) {
+      mus.muted = on;
+      if (!ctx || !mus.bus) return;
+      const now = ctx.currentTime;
+      mus.bus.gain.cancelScheduledValues(now); mus.bus.gain.setTargetAtTime(on ? 0 : MUSIC_LEVEL, now, 0.05);
+    }
+    /** 曲を音の出ない所で sec 秒描き出して、大きさを測る (確かめ用) */
+    async function measureMusic(name, sec) {
+      const OAC = window.OfflineAudioContext || window.webkitOfflineAudioContext;
+      if (!OAC || !SONGS[name]) return null;
+      const oc = new OAC(1, Math.round(44100 * sec), 44100);
+      const m0 = oc.createGain(); m0.gain.value = 0.5; m0.connect(oc.destination);
+      const bus = oc.createGain(); bus.gain.value = MUSIC_LEVEL; bus.connect(m0);
+      const nb = oc.createBuffer(1, oc.sampleRate * 0.5, oc.sampleRate);
+      const d = nb.getChannelData(0);
+      for (let i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1;
+      const sp = 60 / SONGS[name].bpm / 4;
+      for (let i = 0, t = 0.01; t < sec - 0.3; i++, t += sp) musicStep(oc, bus, nb, name, i, t);
+      const buf = await oc.startRendering();
+      const x = buf.getChannelData(0);
+      let peak = 0, sum = 0;
+      for (let i = 0; i < x.length; i++) { const v = Math.abs(x[i]); if (v > peak) peak = v; sum += x[i] * x[i]; }
+      return { peak, rms: Math.sqrt(sum / x.length) };
+    }
+
     const api = {
-      unlock, measure,
+      unlock, measure, music, musicMute, measureMusic,
+      musicName: () => mus.name,
+      /** 決戦の始まり: 下から駆け上がる音と、高いシンバル */
+      final() {
+        [0, 4, 7, 12, 16].forEach((n, i) => setTimeout(() => tone(hz(62 + n), 0.16, 0.16, 'square'), i * 70));
+        setTimeout(() => burst(0.6, 6000, 0.5, 0.3, 'highpass'), 360);
+      },
       throw() { burst(0.16, 1400, 0.8, 0.25, 'bandpass'); },
       steady() { tone(1320, 0.07, 0.12, 'triangle'); },
       /** 大玉を投げた: 低くうなる音 */
@@ -935,6 +1071,7 @@
   // ------------------------------------------------------------ 試合の流れ
   function startMatch() {
     sound.unlock();
+    sound.music(null); sound.musicMute(false);
     app.match = newMatch((Math.random() * 4294967296) >>> 0);
     ensureField(app.match.mode);
     resetPlayers();
@@ -1049,7 +1186,18 @@
         case 'go':
           showBanner('スタート!', '', 0.8);
           sound.whistle(false);
+          if (m.mode === 'royale') sound.music(m.final ? 'final' : 'royale');
           break;
+        case 'final': {
+          // 残り 2 人: 決戦。会場が縮み、カメラが寄り、曲が替わる
+          els.banner.hidden = true;
+          sound.final();
+          if (m.human != null && m.players[m.human].alive) sound.music('final');
+          const names = e.ids.map((id) => (id === mine ? 'あなた' : NAMES[m.players[id].team])).join(' vs ');
+          bigText([{ t: 'FINAL', cls: 'l1' }, { t: 'BATTLE!!', cls: 'l1' }, { t: names, cls: 'info' }], 'red', 2400, 'final-text');
+          app.finalFlash = 1;
+          break;
+        }
         case 'throw': {
           const v = views.players[e.player];
           if (v) v.throwT = 0.35;
@@ -1114,6 +1262,7 @@
               els.banner.hidden = true;
               hitText(`${e.place}位`, 'OUT!!', 1400);
               app.outAt = performance.now();
+              sound.music(null);
             } else if (e.by === mine) {
               app.slowT = 0.2;
               app.hitShake = HIT_SHAKE.time * 1.3;
@@ -1172,6 +1321,7 @@
           break;
         }
         case 'royaleEnd': {
+          sound.music(null);
           sound.whistle(true);
           els.banner.hidden = true;
           const winMe = e.winner === mine;
@@ -1222,6 +1372,7 @@
   function showResult() {
     const m = app.match;
     app.running = false;
+    sound.music(null);
     if (m.mode === 'royale') { showRoyaleResult(m); return; }
     const kind = m.winner === 0 ? 'win' : m.winner === 1 ? 'lose' : 'draw';
     const title = kind === 'win' ? '勝利!' : kind === 'lose' ? '負け…' : '引き分け';
@@ -1365,8 +1516,22 @@
   function camTarget(p) {
     if (app.match && app.match.mode === 'royale') {
       // バトルロイヤル: 自分の真うしろ (南) の少し上から。会場が正方形なので横にも寄せて追う
+      const m = app.match;
+      // 決戦では寄る。見る所は自分と相手のまん中、高さは 2 人の離れ具合で決める (いちばん寄って FINAL 倍)
+      const foe = m.final && p && p.alive ? m.players.find((q) => q.alive && q.id !== p.id) : null;
+      if (foe) {
+        // 縦長の画面なので、横の離れ具合で決まることが多い (寄り f のとき、地面で見える幅は左右 5.8f m・上下 11f m ほど)
+        const dx = foe.x - p.x, dz = foe.z - p.z;
+        const f = clampN(Math.max((Math.abs(dx) / 2 + 1.6) / 5.8, (Math.abs(dz) / 2 + 2) / 11), ROYALE_CAM.final, 1);
+        // それでも入らないほど横に離れたら、自分が画面に残るように、まん中を自分の側へ寄せる
+        const kx = Math.max(0, 5.8 * f - 1.6) * 2;
+        const cx = p.x + clampN(dx, -kx, kx) / 2, cz = p.z + dz / 2;
+        const back = (ROYALE_CAM.back + ROYALE_CAM.ahead) * f;
+        return { pos: new T.Vector3(cx, ROYALE_CAM.h * f, cz + back), look: new T.Vector3(cx, 0, cz) };
+      }
+      const f = 1;
       const x = p ? clampN(p.x, -12, 12) : 0, z = p ? clampN(p.z, -13, 13) : 0;
-      return { pos: new T.Vector3(x, ROYALE_CAM.h, z + ROYALE_CAM.back), look: new T.Vector3(x, 0, z - ROYALE_CAM.ahead) };
+      return { pos: new T.Vector3(x, ROYALE_CAM.h * f, z + ROYALE_CAM.back * f), look: new T.Vector3(x, 0, z - ROYALE_CAM.ahead * f) };
     }
     const x = p ? p.x * 0.35 : 0;
     // あかの選手を追うとき (ビクトリースローのあかの番) は、反対側から見る
@@ -1510,6 +1675,31 @@
         v.hpSpr.position.set(p.x, headTop(p) * stretch + (p.id === m.human ? 0.85 : 0.4), p.z);
       }
 
+      // 画角はあそび方で替える
+      const fov = m.mode === 'royale' ? ROYALE_CAM.fov : CAM.fov;
+      if (camera.fov !== fov) { camera.fov = fov; camera.updateProjectionMatrix(); }
+      // 決戦: 縮んでいく会場のふちに赤い柵
+      const showZone = m.mode === 'royale' && !!m.final;
+      zone.visible = showZone;
+      if (showZone) {
+        const hw = C.ARENA.hw;
+        const H = R.ROYALE.HALF + 0.2, w = H - hw;   // 柵から、もとの会場のふちまで
+        zone.children.forEach((b, i) => {
+          if (i >= 4) return;
+          const along = i < 2;   // 0,1: 北と南 (x 方向に長い) / 2,3: 西と東
+          const sgn = i % 2 ? 1 : -1;
+          b.scale.set(along ? hw * 2 : 1, 1, along ? 1 : hw * 2);
+          b.position.set(along ? 0 : sgn * hw, 0.3, along ? sgn * hw : 0);
+        });
+        outside.forEach((pl, i) => {
+          const ns = i < 2, sgn = i % 2 ? 1 : -1;
+          pl.visible = w > 0.05;
+          pl.scale.set(ns ? H * 2 : w, ns ? w : hw * 2, 1);
+          pl.position.set(ns ? 0 : sgn * (hw + w / 2), 0.03, ns ? sgn * (hw + w / 2) : 0);
+        });
+        zoneMat.opacity = 0.45 + 0.25 * Math.sin(t * 6);
+      }
+
       // 自分の印
       if (mine && mine.alive) {
         meRing.visible = true; meArrow.visible = true;
@@ -1640,6 +1830,8 @@
     const danger = hp === 1 && m.phase === 'play';
     if (app.hud.rdanger !== danger) { app.hud.rdanger = danger; els.rHp.classList.toggle('danger', danger); els.game.classList.toggle('hp-danger', danger); }
     setText('rk', els.rKills, `倒した ${p ? p.kills : 0}`);
+    const fin = !!m.final;
+    if (app.hud.rfin !== fin) { app.hud.rfin = fin; els.rLabel.textContent = fin ? 'FINAL BATTLE' : 'BATTLE ROYALE'; els.rLabel.classList.toggle('final', fin); }
   }
 
   function updateTeamHud(m) {
@@ -1769,6 +1961,7 @@
     if (!app.running) return;
     app.paused = on;
     els.vPause.hidden = !on;
+    sound.musicMute(on);
     if (on) {
       app.aim = null; app.stickTouch = null;
       app.input.mx = app.input.mz = 0; app.input.crouch = false;
@@ -1779,6 +1972,7 @@
 
   function toTitle() {
     app.running = false;
+    sound.music(null); sound.musicMute(false);
     app.paused = false;
     els.vPause.hidden = true;
     els.vResult.hidden = true;
@@ -1881,6 +2075,11 @@
       },
       hpSprite: (id) => { const v = views.players[id]; return v && v.hpSpr ? { visible: v.hpSpr.visible, hp: app.match.players[id].hp, y: +v.hpSpr.position.y.toFixed(2) } : null; },
       fieldMode: () => app.fieldMode,
+      music: () => sound.musicName(),
+      measureMusic: (name, sec) => sound.measureMusic(name, sec || 4),
+      zone: () => ({ visible: zone.visible, hw: C.ARENA.hw }),
+      camPos: () => camera.position.toArray().map((v) => +v.toFixed(2)),
+      fov: () => camera.fov,
       walls: () => C.SHELTERS.length,
       project: (x, y, z) => {
         const v = new T.Vector3(x, y, z).project(camera);

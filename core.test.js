@@ -888,7 +888,7 @@ test('バトルロイヤル: AI だけで 12 試合。必ず終わり、壁に�
   for (let s = 0; s < 12; s++) {
     const m = C.createMatch({ mode: 'royale', seed: 100 + s, human: null });
     let bad = 0;
-    for (let i = 0; i < 60 * 200 && m.phase !== 'matchOver'; i++) {
+    for (let i = 0; i < 60 * 240 && m.phase !== 'matchOver'; i++) {
       C.step(m, 1 / 60, {});
       C.drainEvents(m);
       if ((i & 15) === 0) {
@@ -904,4 +904,43 @@ test('バトルロイヤル: AI だけで 12 試合。必ず終わり、壁に�
     outs += m.out.length;
   }
   assert.ok(outs >= 12 * 3, `脱落が少なすぎる (${outs})`);
+});
+
+test('バトルロイヤル: 残り 2 人で決戦。会場が縮んで、2 人とも真ん中の 8m 四方に入る。時間は 30 秒は残る', () => {
+  const m = royale([0, 5]);
+  const A = m.players[0], B = m.players[5];
+  A.x = -13; A.z = 13; B.x = 13; B.z = -12;
+  m.time = 5;
+  C.step(m, 1 / 60, {});
+  const ev = C.drainEvents(m);
+  assert.ok(ev.some((e) => e.type === 'final'), '決戦のできごと');
+  assert.ok(m.final && m.time >= 29.9, `時間は 30 秒残る (${m.time.toFixed(1)})`);
+  for (let i = 0; i < 60 * (R.ROYALE.FINAL_SHRINK + 0.5); i++) { C.step(m, 1 / 60, {}); C.drainEvents(m); }
+  assert.ok(Math.abs(C.ARENA.hw - R.ROYALE.FINAL_HALF) < 1e-6, `会場が縮む (${C.ARENA.hw})`);
+  for (const p of [A, B]) if (p.alive) assert.ok(Math.abs(p.x) <= R.ROYALE.FINAL_HALF && Math.abs(p.z) <= R.ROYALE.FINAL_HALF, `選手 ${p.id} が真ん中に入る (${p.x.toFixed(1)}, ${p.z.toFixed(1)})`);
+  // 決戦が 1 回だけ
+  assert.ok(!C.drainEvents(m).some((e) => e.type === 'final'));
+});
+
+test('バトルロイヤル: AI だけで 12 試合。決戦になったら、2 人とも縮んだ会場の中で、壁にめりこまない', () => {
+  let finals = 0;
+  for (let s = 0; s < 12; s++) {
+    const m = C.createMatch({ mode: 'royale', seed: 300 + s, human: null });
+    let bad = 0;
+    for (let i = 0; i < 60 * 240 && m.phase !== 'matchOver'; i++) {
+      C.step(m, 1 / 60, {});
+      C.drainEvents(m);
+      if (m.final && m.final.t > R.ROYALE.FINAL_SHRINK && (i & 7) === 0) {
+        for (const p of m.players) {
+          if (!p.alive) continue;
+          if (Math.abs(p.x) > R.ROYALE.FINAL_HALF + 0.01 || Math.abs(p.z) > R.ROYALE.FINAL_HALF + 0.01) bad++;
+          if (C.SHELTERS.some((w) => Math.abs(p.x - w.x) < w.w / 2 - 0.05 && Math.abs(p.z - w.z) < w.d / 2 - 0.05)) bad++;
+        }
+      }
+    }
+    if (m.final) finals++;
+    assert.strictEqual(m.phase, 'matchOver');
+    assert.strictEqual(bad, 0, `seed ${300 + s}`);
+  }
+  assert.ok(finals >= 3, `決戦になった試合 ${finals}/12`);
 });

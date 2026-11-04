@@ -559,3 +559,9 @@ body:has(#vTitle:not([hidden])) .controls { visibility: hidden; }
 .sets-list li.rk .kl { font-size: 12px; color: #6b778a; }
 .sets-list li.rk.you { box-shadow: 0 0 0 3px #ffd34d; }
 .sets-list li.rk .nm small { font-size: 10px; color: #c58a00; margin-left: 4px; }
+
+/* 決戦 (残り 2 人) */
+.r-label.final { color: #e8322a; animation: hpBlink .8s steps(2) infinite; }
+.big-text.final-text { top: 38%; --c: #ff3b1f; }
+.big-text.final-text .l1 { font-size: 74px; line-height: .95; }
+.big-text.final-text .l1 + .l1 { color: #ffd34d; }

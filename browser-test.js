@@ -841,13 +841,16 @@ async function run() {
       ok(hs.every((h) => h && h.visible && h.hp === 3 && h.y > 1.5), `相手の頭の上に体力が出る (${JSON.stringify(hs[0])})`);
       const hud0 = await rp.evaluate(() => ({ alive: document.getElementById('rAlive').textContent, dots: document.querySelectorAll('#rDots i').length, hp: document.querySelectorAll('#rHp i:not(.lost)').length }));
       ok(hud0.alive === '8' && hud0.dots === 8 && hud0.hp === 3, `帯に のこり 8 人・体力 3 (${JSON.stringify(hud0)})`);
+      const cam0 = await rp.evaluate(() => ({ fov: window.__app.fov(), y: window.__app.camPos()[1], music: window.__app.music() }));
+      ok(cam0.fov === 52 && cam0.y > 20, `カメラはいちばん初めの高い位置 (画角 ${cam0.fov}・高さ ${cam0.y})`);
+      ok(cam0.music === 'royale', `スタートでバトルロイヤルの曲が鳴る (${cam0.music})`);
       // 自分が 2 回当たって体力 1: 帯の体力が点滅し、画面のふちが赤くなる
-      await rp.evaluate(() => { window.__app.match().players[0].hp = 1; });
+      await rp.evaluate(() => { const p = window.__app.match().players[0]; p.hp = 1; p.inv = 99; });   // 確かめの間に AI に倒されないように無敵にしておく (点滅は見張りに関係しない)
       await rp.waitForTimeout(400);
       const dg = await rp.evaluate(() => ({ cls: document.getElementById('game').classList.contains('hp-danger'), blink: document.getElementById('rHp').classList.contains('danger'), hp: document.querySelectorAll('#rHp i:not(.lost)').length }));
       ok(dg.cls && dg.blink && dg.hp === 1, `体力 1 で帯が点滅し、画面のふちが赤い (${JSON.stringify(dg)})`);
       // 相手の体力が減ると、頭の上の絵も減る
-      await rp.evaluate(() => { window.__app.match().players[4].hp = 1; });
+      await rp.evaluate(() => { const q = window.__app.match().players[4]; q.hp = 1; q.inv = 99; });
       await rp.waitForTimeout(400);
       ok((await rp.evaluate(() => window.__app.hpSprite(4).hp)) === 1, '相手の体力が減ると頭の上の体力も減る');
       // 自分が当てた (脱落ではない): HIT!!
@@ -855,6 +858,25 @@ async function run() {
       await rp.waitForTimeout(120);
       ok(await rp.evaluate(() => [...document.querySelectorAll('.big-text')].some((e) => /HIT!!/.test(e.textContent))), '自分が当てると HIT!!');
       await rp.waitForTimeout(700);
+      // 残り 2 人で決戦: FINAL BATTLE!!・会場が縮んで柵が出る・曲が替わる・カメラが寄って 2 人とも画面に入る
+      await rp.evaluate(() => { const m = window.__app.match(); m.players[0].hp = 3; m.players[0].inv = 99; m.players[4].hp = 3; for (const i of [1, 2, 3, 5, 6, 7]) { if (!m.players[i].alive) continue; m.players[i].alive = false; m.players[i].hp = 0; m.out.push(i); } });
+      await rp.waitForFunction(() => window.__app.match().final, null, { timeout: 10000 });
+      await rp.waitForTimeout(150);
+      const fb = await rp.evaluate(() => ({ text: [...document.querySelectorAll('.big-text')].some((e) => /FINAL/.test(e.textContent) && /BATTLE!!/.test(e.textContent)), label: document.getElementById('rLabel').textContent, music: window.__app.music(), time: window.__app.match().time }));
+      ok(fb.text && fb.label === 'FINAL BATTLE' && fb.music === 'final' && fb.time >= 29, `残り 2 人で FINAL BATTLE!! が出て、曲が替わり、時間が 30 秒は残る (${JSON.stringify(fb)})`);
+      await rp.waitForFunction(() => window.__app.match().final.t > 6.2, null, { timeout: 40000 });
+      await rp.waitForTimeout(800);
+      const fz = await rp.evaluate(() => {
+        const m = window.__app.match();
+        return { zone: window.__app.zone(), camY: window.__app.camPos()[1], pts: [0, 4].map((i) => window.__app.project(m.players[i].x, 1, m.players[i].z)), pos: [0, 4].map((i) => [m.players[i].x, m.players[i].z]) };
+      });
+      ok(fz.zone.visible && Math.abs(fz.zone.hw - 8) < 0.01, `会場が 16m 四方まで縮み、柵が出る (${fz.zone.hw.toFixed(2)})`);
+      ok(fz.pos.every(([x, z]) => Math.abs(x) <= 8 && Math.abs(z) <= 8), `2 人とも真ん中へ寄せられる (${JSON.stringify(fz.pos.map((q) => q.map((v) => +v.toFixed(1))))})`);
+      ok(fz.camY < 21 && fz.pts.every((q) => q.x > 0 && q.x < 430 && q.y > 115 && q.y < 760), `カメラが寄り (高さ ${fz.camY})、2 人とも帯の下・投げるボタンの上に見える (${JSON.stringify(fz.pts.map((q) => [Math.round(q.x), Math.round(q.y)]))})`);
+      const mv = await rp.evaluate(async () => ({ r: await window.__app.measureMusic('royale', 6), f: await window.__app.measureMusic('final', 6), bashi: await window.__app.sound('bashi') }));
+      ok(mv.r.rms > 0.006 && mv.f.rms > 0.006 && mv.r.peak < mv.bashi.peak && mv.f.peak < mv.bashi.peak,
+        `曲は聞こえて、バシッより小さい (平均 ${mv.r.rms.toFixed(3)} / ${mv.f.rms.toFixed(3)}・最大 ${mv.r.peak.toFixed(2)} / ${mv.f.peak.toFixed(2)} < ${mv.bashi.peak.toFixed(2)})`);
+      await rp.evaluate(() => { window.__app.match().players[0].inv = 0; });
       // 自分が脱落: OUT!! と順位、そのあと残りを先へ進めて結果
       await rp.evaluate(() => {
         const m = window.__app.match(); const p = m.players[0];
@@ -862,7 +884,7 @@ async function run() {
         m.events.push({ type: 'hit', player: 0, by: 1, royale: true, place: p.place, x: p.x, y: 1, z: p.z, vx: 0, vz: 1 });
       });
       await rp.waitForTimeout(150);
-      ok(await rp.evaluate(() => [...document.querySelectorAll('.big-text')].some((e) => /OUT!!/.test(e.textContent) && /8位/.test(e.textContent))), '自分が脱落すると OUT!! と順位 (8位)');
+      ok(await rp.evaluate(() => [...document.querySelectorAll('.big-text')].some((e) => /OUT!!/.test(e.textContent) && /2位/.test(e.textContent))), '決戦で自分が脱落すると OUT!! と順位 (2位)');
       await rp.waitForFunction(() => !document.getElementById('vResult').hidden, null, { timeout: 60000 });
       const res = await rp.evaluate(() => ({
         title: document.getElementById('resultTitle').textContent,
@@ -870,7 +892,7 @@ async function run() {
         you: document.querySelector('#resultSets li.rk.you') && document.querySelector('#resultSets li.rk.you .pl').textContent,
         ranking: window.__app.match().ranking.slice()
       }));
-      ok(res.title === '8位' && res.rows === 8 && res.you === '8位' && new Set(res.ranking).size === 8, `結果に 8 人の順位 (${res.title}・${res.rows} 行・あなた ${res.you})`);
+      ok(res.title === '2位' && res.rows === 8 && res.you === '2位' && new Set(res.ranking).size === 8, `結果に 8 人の順位 (${res.title}・${res.rows} 行・あなた ${res.you})`);
       // タイトルへ戻ると、後ろのデモはチーム戦の会場に戻る。えらんだあそび方は覚えている
       await rp.click('#btnToTitle');
       await rp.waitForTimeout(300);

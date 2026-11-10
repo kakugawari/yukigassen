@@ -7,7 +7,7 @@
   const C = window.Core;
   const R = C.R;
   const T = window.THREE;
-  const VERSION = 'v19';
+  const VERSION = 'v20';
   const AI_SKILL = 0.5;      // 相手の強さ (前の「ふつう」)。強さのえらびはやめ、投げ方をえらぶ
   const AUTO_CROUCH = 0.2;
   const CANCEL = { out: 40, back: 18 };   // 投げるボタン: 40px 以上引っぱってから 18px 以内へ戻して離すと取り消し   // 止まってからしゃがむまで (秒)
@@ -19,7 +19,7 @@
   // 構えている間は、狙う相手の方へ寄る (自分の 5m 後ろ・4m 上から、自分と相手のあいだを見る)
   const AIM_CAM = { back: 5, up: 4, look: 0.55, rate: 8, holdMs: 150 };
   // 自分が当てた瞬間は、当てた相手へ寄る (0.75 秒。寄る量はいちばん寄って 65%)
-  const HIT_CAM = { time: 0.75, dist: 6, up: 3.5, amount: 0.65 };
+  const HIT_CAM = { time: 0.75, dist: 6, up: 3.5, amount: 0.65, royale: 0.35 };
 
   const $ = (id) => document.getElementById(id);
   const els = {
@@ -98,22 +98,33 @@ const ROYALE_CAM = { h: 21, back: 10, ahead: 5, fov: 52, final: 0.72 };
   // art/make_court.py が作る。読めるまで (読めなかったら) は今までの色のまま
   const texLoader = new T.TextureLoader();
   app.tex = { loaded: 0, failed: 0, names: [] };
+  // 絵は 1 回だけ読んで使い回す。会場を作り直すたびに読み直すと、前の絵が GPU に残り続けた
+  // (バトルロイヤル ⇔ タイトルを 6 往復で 11 → 86 枚。1 往復で 8MB ほど)
+  const texCache = new Map();
   function applyTex(mat, name, repeat, glow) {
     const url = (window.ASSETS && window.ASSETS[name]) || './' + name;
+    const key = name + '|' + (repeat ? repeat.join(',') : '');
+    const use = (t) => {
+      mat.map = t;
+      mat.color.setHex(0xffffff);
+      if (glow) { mat.emissiveMap = t; mat.emissive.setScalar(glow); }
+      mat.needsUpdate = true;
+    };
+    const hit = texCache.get(key);
+    if (hit) { if (hit.tex) use(hit.tex); else hit.wait.push(use); return mat; }
+    const entry = { tex: null, wait: [use] };
+    texCache.set(key, entry);
     texLoader.load(url, (t) => {
       t.colorSpace = T.SRGBColorSpace;
       t.anisotropy = 4;
       if (repeat) { t.wrapS = t.wrapT = T.RepeatWrapping; t.repeat.set(repeat[0], repeat[1]); }
-      mat.map = t;
-      mat.color.setHex(0xffffff);
-      // 白い壁は光の当たり方で灰色に沈んで見えたので、同じ絵を少し光らせて明るさを足す (模様は残る)
-      if (glow) { mat.emissiveMap = t; mat.emissive.setScalar(glow); }
-      mat.needsUpdate = true;
+      entry.tex = t;
+      for (const f of entry.wait) f(t);
+      entry.wait = [];
       app.tex.loaded++; app.tex.names.push(name);
-    }, undefined, () => { app.tex.failed++; });
+    }, undefined, () => { app.tex.failed++; texCache.delete(key); });
     return mat;
   }
-
   // 決戦の柵 (4 本の細い箱。毎コマ、縮んだ会場の大きさに合わせる)
   const zoneMat = new T.MeshBasicMaterial({ color: 0xff3020, transparent: true, opacity: 0.6, depthWrite: false });
   const zone = new T.Group();
@@ -139,7 +150,12 @@ const ROYALE_CAM = { h: 21, back: 10, ahead: 5, fov: 52, final: 0.72 };
     app.fieldMode = mode;
     for (const c of fieldRoot.children.slice()) {
       fieldRoot.remove(c);
-      c.traverse((o) => { if (o.geometry) o.geometry.dispose(); });
+      // 使い回している形 (影の板) は捨てない。材質は捨てる (絵は texCache が持ち続ける)
+      c.traverse((o) => {
+        if (o.geometry && o.geometry !== blobGeo) o.geometry.dispose();
+        if (o.material) for (const mt of [].concat(o.material)) mt.dispose();
+        if (o.isInstancedMesh) o.dispose();
+      });
     }
     const before = new Set(scene.children);
     buildField();
@@ -1468,7 +1484,10 @@ const ROYALE_CAM = { h: 21, back: 10, ahead: 5, fov: 52, final: 0.72 };
     }
     const m = app.match, p = me();
     const lockQ = app.lock && app.lock.target != null && m ? m.players[app.lock.target] : null;
-    const wantAim = !!(app.aim && !app.aimCancel && m && m.phase === 'play' && p && p.alive && lockQ && lockQ.alive &&
+    // バトルロイヤルでは構えても寄らない: 21m 上から 4m まで下がって相手の方へ回りこむので、
+    // 見えている相手が 3 人 → 1 人に減り、相手が手前 (南) にいると画面の上下と移動の向きが逆になった
+    const royale = !!(m && m.mode === 'royale');
+    const wantAim = !royale && !!(app.aim && !app.aimCancel && m && m.phase === 'play' && p && p.alive && lockQ && lockQ.alive &&
       (m.aimMode === 'hard' || performance.now() - (app.aim.t0 || 0) > AIM_CAM.holdMs));
     app.aimZoom = lerpN(app.aimZoom || 0, wantAim ? 1 : 0, dt * AIM_CAM.rate);
     if (wantAim) app.aimCamQ = { x: lockQ.x, z: lockQ.z, px: p.x, pz: p.z };
@@ -1484,7 +1503,8 @@ const ROYALE_CAM = { h: 21, back: 10, ahead: 5, fov: 52, final: 0.72 };
     if (hc) {
       hc.t += dt;
       const t = hc.t, T0 = 0.12, T1 = 0.45;
-      const w = (t < T0 ? t / T0 : t < T1 ? 1 : Math.max(0, 1 - (t - T1) / (HIT_CAM.time - T1))) * HIT_CAM.amount;
+      // バトルロイヤルは寄りを浅く (まわりの敵を見失わないように)
+      const w = (t < T0 ? t / T0 : t < T1 ? 1 : Math.max(0, 1 - (t - T1) / (HIT_CAM.time - T1))) * HIT_CAM.amount * (royale ? HIT_CAM.royale : 1);
       let vx = pos.x - hc.x, vz = pos.z - hc.z;
       const vl = Math.hypot(vx, vz) || 1; vx /= vl; vz /= vl;
       pos.lerp(new T.Vector3(hc.x + vx * HIT_CAM.dist, HIT_CAM.up, hc.z + vz * HIT_CAM.dist), w);
@@ -2117,7 +2137,8 @@ const ROYALE_CAM = { h: 21, back: 10, ahead: 5, fov: 52, final: 0.72 };
         return { top: Math.hypot(b.x - a.x, b.y - a.y), side: Math.hypot(c.x - a.x, c.y - a.y), opacity: sm.material.opacity, visible: sm.visible, depthTest: sm.material.depthTest };
       },
       frames: () => app.frames,
-      info: () => ({ calls: renderer.info.render.calls, tris: renderer.info.render.triangles, pr: renderer.getPixelRatio() })
+      info: () => ({ calls: renderer.info.render.calls, tris: renderer.info.render.triangles, pr: renderer.getPixelRatio() }),
+      mem: () => ({ textures: renderer.info.memory.textures, geometries: renderer.info.memory.geometries })
     };
   }
 

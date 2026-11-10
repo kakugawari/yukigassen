@@ -46,13 +46,13 @@
     PEEK_NEAR: 0.6,       // 壁からこれより近く (体のふちから) にいて、壁越しに投げるなら「のぞき投げ」
     PEEK_OUT: 0.25,       // のぞくとき、壁の端からさらに出る量 (体の半径に足す)
     PEEK_MAX: 2.5,        // のぞいたまま待つ上限 (秒)
-    HOMING_TURN: 2.0,
+    HOMING_TURN: 2.0,     // かんたん: 人の玉が相手へ曲がる速さ (rad/s、水平だけ)
     SP_PER_HIT: 0.5,      // 必殺ゲージ: 人が当てるたびに貯まる (2 回で満タン)
     BIG_R: 0.34,          // 必殺の大玉の半径 (ふつうは 0.11)。当たりやすい
     SPLASH_R: 1.6,        // 大玉が落ちた所から、この距離の相手もアウト (壁の陰は除く)
     DUCK_AT: 0.4,         // むずかしい: 人がこれ以上構えると、狙われた AI は壁の陰にしゃがむことがある
     DUCK_TIME: 1.0,       // しゃがんでいる時間 (秒)。そのあと DUCK_CALM 秒は、もうしゃがまない (フェイントの狙いどき)
-    DUCK_CALM: 2.0,     // かんたん: 人の玉が相手へ曲がる速さ (rad/s、水平だけ)
+    DUCK_CALM: 2.0,       // しゃがんだあと、もうしゃがまない時間 (秒)
     MAKE_TIME: 0.6,       // 1 個丸める時間 (0.9 秒では、生きている時間の 6 割が雪玉 0 個だった)
     MAX_CARRY: 3,         // 一度に持てる数。使い切ったら、しゃがんで丸め直す (その間は攻められない)
     START_CARRY: 3,
@@ -435,10 +435,10 @@
   }
 
   /** 大玉が落ちた (人に当たった) 所のまわり SPLASH_R の相手もアウト。間に壁があれば助かる */
-  function splash(m, b) {
+  function splash(m, b, direct) {
     m.events.push({ type: 'splash', x: b.x, z: b.z, by: b.owner });
     for (const q of m.players) {
-      if (!q.alive || q.team === b.team) continue;
+      if (!q.alive || q.team === b.team || q === direct) continue;   // 玉がじかに当たった相手は、もう数えてある
       if (Math.hypot(q.x - b.x, q.z - b.z) > R.SPLASH_R) continue;
       if (segBlocked(b.x, b.z, q.x, q.z)) continue;
       if (m.mode === 'royale') { hurtRoyale(m, q, b, { x: q.x, y: 1, z: q.z, vx: q.x - b.x, vz: q.z - b.z, splash: true }); continue; }
@@ -497,7 +497,7 @@
       } else if (hit.kind !== 'out') {
         m.events.push({ type: 'splat', on: hit.kind, x: b.x, y: Math.max(b.y, 0.02), z: b.z, big: !!b.big });
       }
-      if (b.big && hit.kind !== 'out' && hit.kind !== 'shelter') splash(m, b);
+      if (b.big && hit.kind !== 'out' && hit.kind !== 'shelter') splash(m, b, hit.kind === 'player' ? hit.player : null);
     }
     m.balls = keep;
   }
@@ -542,6 +542,28 @@
     return { xmin: -R.HALF_W + R.PLAYER_R, xmax: R.HALF_W - R.PLAYER_R, zmin, zmax };
   }
 
+  /**
+   * 立ち入れる範囲に収める。決戦で会場が縮むとき、ふちが壁を通り過ぎる間は、
+   * 外から押された選手が壁の中へ押し込まれていた (200 試合で 148 コマ、深さ 0.34m = 壁の真ん中)。
+   * 収めたあと壁に重なっていたら、会場の内側へ壁の面まで出す
+   */
+  function keepInside(p) {
+    const L = limits(p);
+    p.x = clamp(p.x, L.xmin, L.xmax);
+    p.z = clamp(p.z, L.zmin, L.zmax);
+    if (ARENA.mode !== 'royale' || ARENA.hw >= R.ROYALE.HALF) return;
+    const r = R.PLAYER_R;
+    for (const s of SHELTERS) {
+      const hx = s.w / 2 + r, hz = s.d / 2 + r;
+      if (Math.abs(p.x - s.x) >= hx || Math.abs(p.z - s.z) >= hz) continue;
+      // 内側 (真ん中の方) の面へ。x と z のうち、動く量が小さく、会場の中に残る方
+      const nx = s.x - Math.sign(s.x || p.x || 1) * hx, nz = s.z - Math.sign(s.z || p.z || 1) * hz;
+      const okx = nx >= L.xmin && nx <= L.xmax, okz = nz >= L.zmin && nz <= L.zmax;
+      if (okx && (!okz || Math.abs(nx - p.x) <= Math.abs(nz - p.z))) p.x = nx;
+      else if (okz) p.z = nz;
+    }
+  }
+
   function movePlayer(p, input, dt) {
     const wantCrouch = !!input.crouch;
     let mx = input.mx || 0, mz = input.mz || 0;
@@ -553,9 +575,7 @@
     p.x += p.vx * dt; p.z += p.vz * dt;
     if (len > 0.05 && !wantCrouch && p.standT <= 0) p.face = Math.atan2(mx, mz);
     pushOutOfShelters(p);
-    const L = limits(p);
-    p.x = clamp(p.x, L.xmin, L.xmax);
-    p.z = clamp(p.z, L.zmin, L.zmax);
+    keepInside(p);
   }
 
   function separate(players) {
@@ -578,9 +598,7 @@
     for (const p of players) {
       if (!p.alive) continue;
       pushOutOfShelters(p);
-      const L = limits(p);
-      p.x = clamp(p.x, L.xmin, L.xmax);
-      p.z = clamp(p.z, L.zmin, L.zmax);
+      keepInside(p);
     }
   }
 
@@ -978,7 +996,9 @@
     }
     if (alive.length > 1 && m.time > 0) return;
     m.time = Math.max(0, m.time);
-    alive.sort((a, b) => b.hp - a.hp || b.kills - a.kills || a.id - b.id);
+    // 体力 → 倒した数 → 当てた数。それも同じなら、くじ (前は番号の若い順で、人 (0 番) がいつも上になっていた)
+    const lot = m.players.map(() => m.rng());
+    alive.sort((a, b) => b.hp - a.hp || b.kills - a.kills || b.hits - a.hits || lot[a.id] - lot[b.id]);
     const ranking = alive.map((p) => p.id).concat(m.out.slice().reverse());
     ranking.forEach((id, i) => { m.players[id].place = i + 1; });
     m.ranking = ranking;
@@ -1340,14 +1360,18 @@
       if (pk.shot && canThrow(p)) {
         const shot = reaim(m, p, pk.shot);
         if (!coverWall(p, shot.x, shot.z)) out.throwAt = shot;   // 出た所からもふさがれていたら投げない (相手が動いた)
+        pk.dir = Math.atan2(shot.x - p.x, shot.z - p.z);
         pk.phase = 'back'; pk.t = 0;
       } else if (!(human && inp.aiming && p.balls > 0) || pk.t > R.PEEK_MAX || (pk.shot && !canThrow(p))) {
         pk.phase = 'back'; pk.t = 0;
       }
     } else if (pk.phase === 'back' && p.standT <= 0 && !out.throwAt) {
       if (go(pk.hx, pk.hz) || pk.t > 2) {
+        // 戻ったら相手の方を向く (戻る向きのままだと後ろを向いて見える)。
+        // バトルロイヤルは敵が四方にいるので、投げた向きへ (前は「あお以外は全員 +z」を向いていた)
+        if (m.mode === 'royale') { if (pk.dir != null) p.face = pk.dir; }
+        else p.face = p.team === 0 ? Math.PI : 0;
         p.peek = null;
-        p.face = p.team === 0 ? Math.PI : 0;      // 戻ったら相手の方を向く (戻る向きのままだと後ろを向いて見える)
       }
     }
     return out;

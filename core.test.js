@@ -930,10 +930,11 @@ test('バトルロイヤル: AI だけで 12 試合。決戦になったら、2 
     for (let i = 0; i < 60 * 240 && m.phase !== 'matchOver'; i++) {
       C.step(m, 1 / 60, {});
       C.drainEvents(m);
-      if (m.final && m.final.t > R.ROYALE.FINAL_SHRINK && (i & 7) === 0) {
+      // 縮んでいる最中も見る: ふちが壁を通り過ぎる間、外から押された選手が壁の中へ押し込まれていた
+      if (m.final && m.phase === 'play') {
         for (const p of m.players) {
           if (!p.alive) continue;
-          if (Math.abs(p.x) > R.ROYALE.FINAL_HALF + 0.01 || Math.abs(p.z) > R.ROYALE.FINAL_HALF + 0.01) bad++;
+          if (m.final.t > R.ROYALE.FINAL_SHRINK && (Math.abs(p.x) > R.ROYALE.FINAL_HALF + 0.01 || Math.abs(p.z) > R.ROYALE.FINAL_HALF + 0.01)) bad++;
           if (C.SHELTERS.some((w) => Math.abs(p.x - w.x) < w.w / 2 - 0.05 && Math.abs(p.z - w.z) < w.d / 2 - 0.05)) bad++;
         }
       }
@@ -943,4 +944,52 @@ test('バトルロイヤル: AI だけで 12 試合。決戦になったら、2 
     assert.strictEqual(bad, 0, `seed ${300 + s}`);
   }
   assert.ok(finals >= 3, `決戦になった試合 ${finals}/12`);
+});
+
+test('バトルロイヤル: 決戦で会場のふちが壁を通り過ぎても、外にいた選手は壁の中に入らない', () => {
+  // 外側の壁 (x = 10.5) のすぐ外に立たせて、決戦を始める
+  for (const [x, z] of [[11.2, 3.2], [-11.2, -3.2], [3.2, 11.2], [-3.2, -11.2], [10.5, 4.6], [14, 14]]) {
+    const m = royale([0, 5]);
+    const A = m.players[0], B = m.players[5];
+    A.x = x; A.z = z; B.x = 0; B.z = 3;
+    let deep = 0;
+    for (let i = 0; i < 60 * 8; i++) {
+      A.balls = B.balls = 0; A.inv = B.inv = 9;
+      C.step(m, 1 / 60, {}); C.drainEvents(m);
+      for (const w of C.SHELTERS) deep = Math.max(deep, Math.min(w.w / 2 - Math.abs(A.x - w.x), w.d / 2 - Math.abs(A.z - w.z)));
+    }
+    assert.ok(deep < 0.02, `(${x}, ${z}) から: 壁の中へ ${deep.toFixed(2)}m`);
+    assert.ok(Math.abs(A.x) <= R.ROYALE.FINAL_HALF && Math.abs(A.z) <= R.ROYALE.FINAL_HALF);
+  }
+});
+
+test('バトルロイヤル: 時間切れで体力も倒した数も当てた数も同じなら、番号の若い人がいつも上にはならない', () => {
+  let first0 = 0;
+  for (let s = 0; s < 40; s++) {
+    const m = royale([0, 5], { seed: 700 + s });
+    m.players[0].inv = m.players[5].inv = 99;
+    m.time = 0.01;
+    C.step(m, 1 / 60, {});
+    assert.strictEqual(m.decidedBy, 'time');
+    if (m.ranking[0] === 0) first0++;
+  }
+  assert.ok(first0 >= 8 && first0 <= 32, `0 番が 1 位になったのは 40 回中 ${first0} 回`);
+});
+
+test('バトルロイヤル: のぞき投げから戻ったら、投げた向きを向く (南の相手に投げて北を向かない)', () => {
+  const m = royale([0, 3], { human: 0, aimMode: 'easy' });
+  const A = m.players[0], B = m.players[3];
+  const w = C.SHELTERS.find((s) => s.x === 0 && s.z === 6.5);      // 横に長い壁
+  A.x = w.x; A.z = w.z - w.d / 2 - R.PLAYER_R - 0.05;              // 壁の北側のすぐ裏
+  B.x = 0; B.z = 12;                                                // 相手は南
+  let peeked = false, threw = false;
+  for (let i = 0; i < 60 * 4; i++) {
+    B.balls = 0; B.inv = 9; B.x = 0; B.z = 12;
+    const inp = i === 2 ? { throwAt: { x: B.x, z: B.z, target: 3 } } : {};
+    C.step(m, 1 / 60, inp);
+    for (const e of C.drainEvents(m)) { if (e.type === 'peek') peeked = true; if (e.type === 'throw' && e.player === 0) threw = true; }
+    if (peeked && threw && !A.peek) break;
+  }
+  assert.ok(peeked && threw && !A.peek, `のぞいて投げて戻る (peek ${peeked} throw ${threw})`);
+  assert.ok(Math.cos(A.face) > 0.5, `南 (+z) を向く (face ${A.face.toFixed(2)})`);
 });

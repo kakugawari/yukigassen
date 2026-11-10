@@ -844,6 +844,19 @@ async function run() {
       const cam0 = await rp.evaluate(() => ({ fov: window.__app.fov(), y: window.__app.camPos()[1], music: window.__app.music() }));
       ok(cam0.fov === 52 && cam0.y > 20, `カメラはいちばん初めの高い位置 (画角 ${cam0.fov}・高さ ${cam0.y})`);
       ok(cam0.music === 'royale', `スタートでバトルロイヤルの曲が鳴る (${cam0.music})`);
+      // 構えてもカメラは下がらない (低く寄ると、まわりの敵が見えなくなる。相手が手前にいると移動の向きも逆になる)
+      {
+        const pad = await rp.evaluate(() => { const r = document.getElementById('throwPad').getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2 }; });
+        const cdpR = await context.newCDPSession(rp);
+        await cdpR.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x: pad.x, y: pad.y, id: 7 }] });
+        await rp.waitForTimeout(1500);
+        const held = await rp.evaluate(() => ({ y: window.__app.camPos()[1], zoom: window.__app.camInfo().aimZoom, on: document.getElementById('throwPad').classList.contains('on') }));
+        // 取り消しの位置まで引いて戻してから離す (投げない)
+        await cdpR.send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: [{ x: pad.x, y: pad.y - 60, id: 7 }] });
+        await cdpR.send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: [{ x: pad.x, y: pad.y, id: 7 }] });
+        await cdpR.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+        ok(held.on && held.y > 20 && held.zoom < 0.01, `投げるを押さえても、カメラは高いまま (高さ ${held.y}・寄り ${held.zoom.toFixed(2)})`);
+      }
       // 自分が 2 回当たって体力 1: 帯の体力が点滅し、画面のふちが赤くなる
       await rp.evaluate(() => { const p = window.__app.match().players[0]; p.hp = 1; p.inv = 99; });   // 確かめの間に AI に倒されないように無敵にしておく (点滅は見張りに関係しない)
       await rp.waitForTimeout(400);
@@ -907,6 +920,18 @@ async function run() {
       await rp.click('#btnStart');
       const tm = await rp.evaluate(() => ({ mode: window.__app.match().mode, n: window.__app.match().players.length, walls: window.__app.walls(), field: window.__app.fieldMode(), hp: window.__app.hpSprite(3) }));
       ok(tm.mode === 'team' && tm.n === 14 && tm.walls === 7 && tm.field === 'team' && tm.hp === null, `チーム戦に戻すと 7 対 7・壁 7 基・頭の上の体力なし (${JSON.stringify(tm)})`);
+      // あそび方を行き来しても、絵 (テクスチャ) が増え続けない。前は会場を作り直すたびに読み直し、6 往復で 11 → 86 枚になった
+      await rp.click('#btnPause'); await rp.click('#btnQuit');
+      await rp.waitForTimeout(600);
+      const texN = [];
+      for (let k = 0; k < 4; k++) {
+        await rp.evaluate(() => window.__app.start('easy', 3, 'royale'));
+        await rp.waitForTimeout(900);
+        await rp.click('#btnPause'); await rp.click('#btnQuit');
+        await rp.waitForTimeout(900);
+        texN.push(await rp.evaluate(() => window.__app.mem().textures));
+      }
+      ok(texN[3] <= texN[0] + 1, `バトルロイヤル ⇔ タイトルを 4 往復しても、絵の枚数が増えない (${texN.join(' → ')})`);
       await rp.close();
       await phone.bringToFront();
     }

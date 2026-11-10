@@ -993,3 +993,24 @@ test('バトルロイヤル: のぞき投げから戻ったら、投げた向き
   assert.ok(peeked && threw && !A.peek, `のぞいて投げて戻る (peek ${peeked} throw ${threw})`);
   assert.ok(Math.cos(A.face) > 0.5, `南 (+z) を向く (face ${A.face.toFixed(2)})`);
 });
+
+test('バトルロイヤル: かんたんの玉の曲がりは、チーム戦より弱い (0.6 rad/s。チーム戦は 2.0)', () => {
+  // 横へ走る相手へ投げ、0.3 秒のあいだに玉の向きが何 rad 変わったかを見る
+  const turned = (mode) => {
+    const m = mode === 'royale' ? royale([0, 3], { human: 0, aimMode: 'easy' })
+      : (() => { const t = playing({ human: 0, aimMode: 'easy' }); isolate(t, [0, 7]); return t; })();
+    const A = m.players[0], B = m.players[mode === 'royale' ? 3 : 7];
+    A.x = -3; A.z = 3; A.balls = 3; A.cd = 0;
+    B.x = -3; B.z = -9; B.inv = 9;
+    C.step(m, 1 / 60, { throwAt: { x: B.x, z: B.z, target: B.id } });
+    const b = m.balls[0];
+    assert.ok(b && b.home === B.id, '相手を追う玉');
+    const a0 = Math.atan2(b.vx, b.vz);
+    for (let i = 0; i < 18; i++) { B.x += 4.3 / 60; B.vx = 4.3; B.vz = 0; B.balls = 0; A.balls = 0; C.step(m, 1 / 60, {}); B.z = -9; }
+    return Math.abs(Math.atan2(b.vx, b.vz) - a0);
+  };
+  const r = turned('royale'), t = turned('team');
+  assert.ok(r > 0.02 && r <= R.ROYALE.HOMING_TURN * 0.3 + 0.01, `バトルロイヤル: 0.3 秒で ${r.toFixed(3)} rad (上限 ${(R.ROYALE.HOMING_TURN * 0.3).toFixed(2)})`);
+  assert.ok(t > r * 1.3, `チーム戦の方がよく曲がる (${t.toFixed(3)} > ${r.toFixed(3)})`);
+  assert.strictEqual(R.HOMING_TURN, 2.0);
+});

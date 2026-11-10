@@ -64,7 +64,8 @@
     // バトルロイヤル (公式に無い別のモード): 8 人全員が敵。30m 四方。3 分。3 回当たると脱落
     ROYALE: { N: 8, HALF: 15, TIME: 180, HP: 3, INV: 1.0, SPAWN_R: 13.2,
       // 決戦 (残り 2 人): 会場が FINAL_HALF 四方まで FINAL_SHRINK 秒で縮み、真ん中へ寄せる。残り時間は少なくとも FINAL_TIME 秒にする
-      FINAL_HALF: 8, FINAL_SHRINK: 6, FINAL_TIME: 30 },
+      FINAL_HALF: 8, FINAL_SHRINK: 6, FINAL_TIME: 30,
+      HOMING_TURN: 0.6 },   // かんたんの玉の曲がり (rad/s)。チーム戦は 2.0
     FORWARDS: 4,
     BACKS: 3
   };
@@ -414,7 +415,9 @@
     while (da > Math.PI) da -= 2 * Math.PI;
     while (da < -Math.PI) da += 2 * Math.PI;
     if (Math.abs(da) > Math.PI / 2) { b.home = null; return; }   // 追い越したら曲げない
-    const a = Math.atan2(b.vx, b.vz) + clamp(da, -R.HOMING_TURN * dt, R.HOMING_TURN * dt);
+    // バトルロイヤルは曲がりを弱くする (チーム戦と同じ強さだと、動かずに投げるだけで 7 割勝てた)
+    const turn = (m.mode === 'royale' ? R.ROYALE.HOMING_TURN : R.HOMING_TURN) * dt;
+    const a = Math.atan2(b.vx, b.vz) + clamp(da, -turn, turn);
     b.vx = Math.sin(a) * sp; b.vz = Math.cos(a) * sp;
   }
 

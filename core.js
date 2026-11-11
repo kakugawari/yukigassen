@@ -46,13 +46,13 @@
     PEEK_NEAR: 0.6,       // 壁からこれより近く (体のふちから) にいて、壁越しに投げるなら「のぞき投げ」
     PEEK_OUT: 0.25,       // のぞくとき、壁の端からさらに出る量 (体の半径に足す)
     PEEK_MAX: 2.5,        // のぞいたまま待つ上限 (秒)
-    HOMING_TURN: 2.0,
+    HOMING_TURN: 2.0,     // かんたん: 人の玉が相手へ曲がる速さ (rad/s、水平だけ)
     SP_PER_HIT: 0.5,      // 必殺ゲージ: 人が当てるたびに貯まる (2 回で満タン)
     BIG_R: 0.34,          // 必殺の大玉の半径 (ふつうは 0.11)。当たりやすい
     SPLASH_R: 1.6,        // 大玉が落ちた所から、この距離の相手もアウト (壁の陰は除く)
     DUCK_AT: 0.4,         // むずかしい: 人がこれ以上構えると、狙われた AI は壁の陰にしゃがむことがある
     DUCK_TIME: 1.0,       // しゃがんでいる時間 (秒)。そのあと DUCK_CALM 秒は、もうしゃがまない (フェイントの狙いどき)
-    DUCK_CALM: 2.0,     // かんたん: 人の玉が相手へ曲がる速さ (rad/s、水平だけ)
+    DUCK_CALM: 2.0,       // しゃがんだあと、もうしゃがまない時間 (秒)
     MAKE_TIME: 0.6,       // 1 個丸める時間 (0.9 秒では、生きている時間の 6 割が雪玉 0 個だった)
     MAX_CARRY: 3,         // 一度に持てる数。使い切ったら、しゃがんで丸め直す (その間は攻められない)
     START_CARRY: 3,
@@ -62,9 +62,14 @@
     COUNTDOWN: 2.0,
     SET_OVER: 3.0,
     // バトルロイヤル (公式に無い別のモード): 8 人全員が敵。30m 四方。3 分。3 回当たると脱落
-    ROYALE: { N: 8, HALF: 15, TIME: 180, HP: 3, INV: 1.0, SPAWN_R: 13.2,
-      // 決戦 (残り 2 人): 会場が FINAL_HALF 四方まで FINAL_SHRINK 秒で縮み、真ん中へ寄せる。残り時間は少なくとも FINAL_TIME 秒にする
-      FINAL_HALF: 8, FINAL_SHRINK: 6, FINAL_TIME: 30 },
+    ROYALE: { N: 8, HALF: 15, TIME: 180, HP: 5, INV: 1.0, SPAWN_R: 13.2,
+      BIG_DMG: 2,           // 必殺の大玉は体力を 2 減らす (じかに当たっても、まわりに弾けても)
+      // ステージは時間で縮む: 残り時間が at 秒になったら、half 四方の半分へ FINAL_SHRINK 秒かけて縮む。
+      // 前は残り 2 人 (決戦) になるまで縮まず、縮むのを見る前に勝つかやられるかしていた
+      SHRINK: [{ at: 150, half: 12 }, { at: 105, half: 10 }, { at: 60, half: 8 }],
+      // 決戦 (残り 2 人): まだなら FINAL_HALF 四方まで縮める。残り時間は少なくとも FINAL_TIME 秒にする
+      FINAL_HALF: 8, FINAL_SHRINK: 6, FINAL_TIME: 30,
+      HOMING_TURN: 0.6 },   // かんたんの玉の曲がり (rad/s)。チーム戦は 2.0
     FORWARDS: 4,
     BACKS: 3
   };
@@ -140,12 +145,27 @@
     ARENA.hw = mode === 'royale' ? royaleHalf(m) : R.HALF_W;
     ARENA.hl = mode === 'royale' ? royaleHalf(m) : R.HALF_L;
   }
-  /** バトルロイヤルの会場の半分の広さ。決戦が始まると、なめらかに縮む */
+  /** バトルロイヤルの会場の半分の広さ。縮み始めると、from から to へなめらかに動く (m.zone) */
   function royaleHalf(m) {
-    const f = m && m.final;
-    if (!f) return R.ROYALE.HALF;
-    const k = Math.min(1, f.t / R.ROYALE.FINAL_SHRINK), e = k * k * (3 - 2 * k);
-    return R.ROYALE.HALF + (R.ROYALE.FINAL_HALF - R.ROYALE.HALF) * e;
+    const z = m && m.zone;
+    if (!z) return R.ROYALE.HALF;
+    const k = Math.min(1, z.t / R.ROYALE.FINAL_SHRINK), e = k * k * (3 - 2 * k);
+    return z.from + (z.to - z.from) * e;
+  }
+  /** 会場を half まで縮め始める (いまより広い指定は無視)。縮み始めたら true */
+  function shrinkTo(m, half) {
+    const z = m.zone;
+    if (half >= z.to - 1e-9) return false;
+    m.zone = { from: royaleHalf(m), to: half, t: 0, stage: z.stage };
+    return true;
+  }
+  /** 時間で縮む: 残り時間が次の段の at を切ったら縮め始める (まとめて切ったら、いちばん狭い段へ) */
+  function stepZone(m, dt) {
+    const z = m.zone, S = R.ROYALE.SHRINK;
+    z.t += dt;
+    let hit = -1;
+    while (z.stage < S.length && m.time <= S[z.stage].at) { hit = z.stage; z.stage++; }
+    if (hit >= 0 && shrinkTo(m, S[hit].half)) m.events.push({ type: 'shrink', half: S[hit].half, stage: hit + 1, of: S.length });
   }
 
   function flagPos(team) { return { x: 0, z: side(team) * R.FLAG_U }; }
@@ -231,6 +251,7 @@
     m.players = [];
     m.out = [];          // 脱落した順
     m.final = null;      // 決戦 (残り 2 人) が始まったら { t: 経った秒, ids }
+    m.zone = { from: R.ROYALE.HALF, to: R.ROYALE.HALF, t: 99, stage: 0 };   // ステージの広さ (半分)。時間と決戦で縮む
     for (let i = 0; i < N; i++) {
       const a = (i + 0.5) / N * Math.PI * 2;
       const p = newPlayer(i, i, 'F', i + 1, Math.sin(a) * R.ROYALE.SPAWN_R, Math.cos(a) * R.ROYALE.SPAWN_R);
@@ -414,7 +435,9 @@
     while (da > Math.PI) da -= 2 * Math.PI;
     while (da < -Math.PI) da += 2 * Math.PI;
     if (Math.abs(da) > Math.PI / 2) { b.home = null; return; }   // 追い越したら曲げない
-    const a = Math.atan2(b.vx, b.vz) + clamp(da, -R.HOMING_TURN * dt, R.HOMING_TURN * dt);
+    // バトルロイヤルは曲がりを弱くする (チーム戦と同じ強さだと、動かずに投げるだけで 7 割勝てた)
+    const turn = (m.mode === 'royale' ? R.ROYALE.HOMING_TURN : R.HOMING_TURN) * dt;
+    const a = Math.atan2(b.vx, b.vz) + clamp(da, -turn, turn);
     b.vx = Math.sin(a) * sp; b.vz = Math.cos(a) * sp;
   }
 
@@ -435,10 +458,10 @@
   }
 
   /** 大玉が落ちた (人に当たった) 所のまわり SPLASH_R の相手もアウト。間に壁があれば助かる */
-  function splash(m, b) {
+  function splash(m, b, direct) {
     m.events.push({ type: 'splash', x: b.x, z: b.z, by: b.owner });
     for (const q of m.players) {
-      if (!q.alive || q.team === b.team) continue;
+      if (!q.alive || q.team === b.team || q === direct) continue;   // 玉がじかに当たった相手は、もう数えてある
       if (Math.hypot(q.x - b.x, q.z - b.z) > R.SPLASH_R) continue;
       if (segBlocked(b.x, b.z, q.x, q.z)) continue;
       if (m.mode === 'royale') { hurtRoyale(m, q, b, { x: q.x, y: 1, z: q.z, vx: q.x - b.x, vz: q.z - b.z, splash: true }); continue; }
@@ -454,12 +477,13 @@
   function hurtRoyale(m, p, b, at) {
     if (p.inv > 0) { m.events.push({ type: 'block', player: p.id, x: at.x, y: at.y, z: at.z }); return false; }
     const owner = m.players[b.owner];
-    p.hp -= 1;
+    const dmg = Math.min(p.hp, b.big ? R.ROYALE.BIG_DMG : 1);   // 大玉は 2
+    p.hp -= dmg;
     p.inv = R.ROYALE.INV;
     if (owner) owner.hits++;
     if (b.human && !b.big) m.sp[b.team] = Math.min(1, m.sp[b.team] + R.SP_PER_HIT);
     if (p.hp > 0) {
-      m.events.push(Object.assign({ type: 'hurt', player: p.id, hp: p.hp, by: b.owner, big: !!b.big }, at));
+      m.events.push(Object.assign({ type: 'hurt', player: p.id, hp: p.hp, dmg, by: b.owner, big: !!b.big }, at));
       return true;
     }
     p.alive = false;
@@ -497,7 +521,7 @@
       } else if (hit.kind !== 'out') {
         m.events.push({ type: 'splat', on: hit.kind, x: b.x, y: Math.max(b.y, 0.02), z: b.z, big: !!b.big });
       }
-      if (b.big && hit.kind !== 'out' && hit.kind !== 'shelter') splash(m, b);
+      if (b.big && hit.kind !== 'out' && hit.kind !== 'shelter') splash(m, b, hit.kind === 'player' ? hit.player : null);
     }
     m.balls = keep;
   }
@@ -542,6 +566,28 @@
     return { xmin: -R.HALF_W + R.PLAYER_R, xmax: R.HALF_W - R.PLAYER_R, zmin, zmax };
   }
 
+  /**
+   * 立ち入れる範囲に収める。決戦で会場が縮むとき、ふちが壁を通り過ぎる間は、
+   * 外から押された選手が壁の中へ押し込まれていた (200 試合で 148 コマ、深さ 0.34m = 壁の真ん中)。
+   * 収めたあと壁に重なっていたら、会場の内側へ壁の面まで出す
+   */
+  function keepInside(p) {
+    const L = limits(p);
+    p.x = clamp(p.x, L.xmin, L.xmax);
+    p.z = clamp(p.z, L.zmin, L.zmax);
+    if (ARENA.mode !== 'royale' || ARENA.hw >= R.ROYALE.HALF) return;
+    const r = R.PLAYER_R;
+    for (const s of SHELTERS) {
+      const hx = s.w / 2 + r, hz = s.d / 2 + r;
+      if (Math.abs(p.x - s.x) >= hx || Math.abs(p.z - s.z) >= hz) continue;
+      // 内側 (真ん中の方) の面へ。x と z のうち、動く量が小さく、会場の中に残る方
+      const nx = s.x - Math.sign(s.x || p.x || 1) * hx, nz = s.z - Math.sign(s.z || p.z || 1) * hz;
+      const okx = nx >= L.xmin && nx <= L.xmax, okz = nz >= L.zmin && nz <= L.zmax;
+      if (okx && (!okz || Math.abs(nx - p.x) <= Math.abs(nz - p.z))) p.x = nx;
+      else if (okz) p.z = nz;
+    }
+  }
+
   function movePlayer(p, input, dt) {
     const wantCrouch = !!input.crouch;
     let mx = input.mx || 0, mz = input.mz || 0;
@@ -553,9 +599,7 @@
     p.x += p.vx * dt; p.z += p.vz * dt;
     if (len > 0.05 && !wantCrouch && p.standT <= 0) p.face = Math.atan2(mx, mz);
     pushOutOfShelters(p);
-    const L = limits(p);
-    p.x = clamp(p.x, L.xmin, L.xmax);
-    p.z = clamp(p.z, L.zmin, L.zmax);
+    keepInside(p);
   }
 
   function separate(players) {
@@ -578,9 +622,7 @@
     for (const p of players) {
       if (!p.alive) continue;
       pushOutOfShelters(p);
-      const L = limits(p);
-      p.x = clamp(p.x, L.xmin, L.xmax);
-      p.z = clamp(p.z, L.zmin, L.zmax);
+      keepInside(p);
     }
   }
 
@@ -757,7 +799,7 @@
       const aim = findAim(m.players, p.team, p.x, p.z, q, ax, az);
       if (!aim) continue;
       const score = d + (hidden ? 5 : 0) + aim.off * 0.8 +
-        (m.mode === 'royale' ? -(R.ROYALE.HP - q.hp) * 1.5 + (q.inv > 0.3 ? 6 : 0) : (q.role === 'F' && Math.abs(q.z) < 8 ? -2 : 0));
+        (m.mode === 'royale' ? -(R.ROYALE.HP - q.hp) * 4.5 / R.ROYALE.HP + (q.inv > 0.3 ? 6 : 0) : (q.role === 'F' && Math.abs(q.z) < 8 ? -2 : 0));
       if (score < bestScore) { bestScore = score; best = { q, ax: aim.x, az: aim.z, d, mv: Math.hypot(q.vx, q.vz) * t }; }
     }
     if (!best) return null;
@@ -974,11 +1016,14 @@
     if (alive.length === 2 && m.time > 0 && !m.final) {
       m.final = { t: 0, ids: alive.map((p) => p.id) };
       m.time = Math.max(m.time, R.ROYALE.FINAL_TIME);
+      shrinkTo(m, R.ROYALE.FINAL_HALF);
       m.events.push({ type: 'final', ids: m.final.ids.slice() });
     }
     if (alive.length > 1 && m.time > 0) return;
     m.time = Math.max(0, m.time);
-    alive.sort((a, b) => b.hp - a.hp || b.kills - a.kills || a.id - b.id);
+    // 体力 → 倒した数 → 当てた数。それも同じなら、くじ (前は番号の若い順で、人 (0 番) がいつも上になっていた)
+    const lot = m.players.map(() => m.rng());
+    alive.sort((a, b) => b.hp - a.hp || b.kills - a.kills || b.hits - a.hits || lot[a.id] - lot[b.id]);
     const ranking = alive.map((p) => p.id).concat(m.out.slice().reverse());
     ranking.forEach((id, i) => { m.players[id].place = i + 1; });
     m.ranking = ranking;
@@ -1340,14 +1385,18 @@
       if (pk.shot && canThrow(p)) {
         const shot = reaim(m, p, pk.shot);
         if (!coverWall(p, shot.x, shot.z)) out.throwAt = shot;   // 出た所からもふさがれていたら投げない (相手が動いた)
+        pk.dir = Math.atan2(shot.x - p.x, shot.z - p.z);
         pk.phase = 'back'; pk.t = 0;
       } else if (!(human && inp.aiming && p.balls > 0) || pk.t > R.PEEK_MAX || (pk.shot && !canThrow(p))) {
         pk.phase = 'back'; pk.t = 0;
       }
     } else if (pk.phase === 'back' && p.standT <= 0 && !out.throwAt) {
       if (go(pk.hx, pk.hz) || pk.t > 2) {
+        // 戻ったら相手の方を向く (戻る向きのままだと後ろを向いて見える)。
+        // バトルロイヤルは敵が四方にいるので、投げた向きへ (前は「あお以外は全員 +z」を向いていた)
+        if (m.mode === 'royale') { if (pk.dir != null) p.face = pk.dir; }
+        else p.face = p.team === 0 ? Math.PI : 0;
         p.peek = null;
-        p.face = p.team === 0 ? Math.PI : 0;      // 戻ったら相手の方を向く (戻る向きのままだと後ろを向いて見える)
       }
     }
     return out;
@@ -1405,7 +1454,7 @@
     }
     separate(m.players);
     stepBalls(m, dt);
-    if (m.mode === 'royale') { if (m.final) m.final.t += dt; checkRoyaleEnd(m); }
+    if (m.mode === 'royale') { if (m.final) m.final.t += dt; stepZone(m, dt); checkRoyaleEnd(m); }
     else { handOver(m); checkSetEnd(m); }
     return m;
   }

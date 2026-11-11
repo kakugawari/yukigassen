@@ -7,7 +7,7 @@
   const C = window.Core;
   const R = C.R;
   const T = window.THREE;
-  const VERSION = 'v19';
+  const VERSION = 'v22';
   const AI_SKILL = 0.5;      // 相手の強さ (前の「ふつう」)。強さのえらびはやめ、投げ方をえらぶ
   const AUTO_CROUCH = 0.2;
   const CANCEL = { out: 40, back: 18 };   // 投げるボタン: 40px 以上引っぱってから 18px 以内へ戻して離すと取り消し   // 止まってからしゃがむまで (秒)
@@ -19,7 +19,7 @@
   // 構えている間は、狙う相手の方へ寄る (自分の 5m 後ろ・4m 上から、自分と相手のあいだを見る)
   const AIM_CAM = { back: 5, up: 4, look: 0.55, rate: 8, holdMs: 150 };
   // 自分が当てた瞬間は、当てた相手へ寄る (0.75 秒。寄る量はいちばん寄って 65%)
-  const HIT_CAM = { time: 0.75, dist: 6, up: 3.5, amount: 0.65 };
+  const HIT_CAM = { time: 0.75, dist: 6, up: 3.5, amount: 0.65, royale: 0.35 };
 
   const $ = (id) => document.getElementById(id);
   const els = {
@@ -36,7 +36,7 @@
     btnStart: $('btnStart'), btnPause: $('btnPause'), btnResume: $('btnResume'), btnQuit: $('btnQuit'),
     btnAgain: $('btnAgain'), btnToTitle: $('btnToTitle'), resultTitle: $('resultTitle'), resultSets: $('resultSets'),
     ver: $('ver'), tagLine: $('tagLine'),
-    rAlive: $('rAlive'), rDots: $('rDots'), rTime: $('rTime'), rHp: $('rHp'), rKills: $('rKills'), rLabel: $('rLabel')
+    rAlive: $('rAlive'), rDots: $('rDots'), rTime: $('rTime'), rHp: $('rHp'), rKills: $('rKills'), rLabel: $('rLabel'), focus: $('focus')
   };
 
   // 0 あお・1 あか はチーム戦と同じ。2〜7 はバトルロイヤルの色 (絵は、あおの青い所を塗り替えて作る)
@@ -98,22 +98,33 @@ const ROYALE_CAM = { h: 21, back: 10, ahead: 5, fov: 52, final: 0.72 };
   // art/make_court.py が作る。読めるまで (読めなかったら) は今までの色のまま
   const texLoader = new T.TextureLoader();
   app.tex = { loaded: 0, failed: 0, names: [] };
+  // 絵は 1 回だけ読んで使い回す。会場を作り直すたびに読み直すと、前の絵が GPU に残り続けた
+  // (バトルロイヤル ⇔ タイトルを 6 往復で 11 → 86 枚。1 往復で 8MB ほど)
+  const texCache = new Map();
   function applyTex(mat, name, repeat, glow) {
     const url = (window.ASSETS && window.ASSETS[name]) || './' + name;
+    const key = name + '|' + (repeat ? repeat.join(',') : '');
+    const use = (t) => {
+      mat.map = t;
+      mat.color.setHex(0xffffff);
+      if (glow) { mat.emissiveMap = t; mat.emissive.setScalar(glow); }
+      mat.needsUpdate = true;
+    };
+    const hit = texCache.get(key);
+    if (hit) { if (hit.tex) use(hit.tex); else hit.wait.push(use); return mat; }
+    const entry = { tex: null, wait: [use] };
+    texCache.set(key, entry);
     texLoader.load(url, (t) => {
       t.colorSpace = T.SRGBColorSpace;
       t.anisotropy = 4;
       if (repeat) { t.wrapS = t.wrapT = T.RepeatWrapping; t.repeat.set(repeat[0], repeat[1]); }
-      mat.map = t;
-      mat.color.setHex(0xffffff);
-      // 白い壁は光の当たり方で灰色に沈んで見えたので、同じ絵を少し光らせて明るさを足す (模様は残る)
-      if (glow) { mat.emissiveMap = t; mat.emissive.setScalar(glow); }
-      mat.needsUpdate = true;
+      entry.tex = t;
+      for (const f of entry.wait) f(t);
+      entry.wait = [];
       app.tex.loaded++; app.tex.names.push(name);
-    }, undefined, () => { app.tex.failed++; });
+    }, undefined, () => { app.tex.failed++; texCache.delete(key); });
     return mat;
   }
-
   // 決戦の柵 (4 本の細い箱。毎コマ、縮んだ会場の大きさに合わせる)
   const zoneMat = new T.MeshBasicMaterial({ color: 0xff3020, transparent: true, opacity: 0.6, depthWrite: false });
   const zone = new T.Group();
@@ -139,7 +150,12 @@ const ROYALE_CAM = { h: 21, back: 10, ahead: 5, fov: 52, final: 0.72 };
     app.fieldMode = mode;
     for (const c of fieldRoot.children.slice()) {
       fieldRoot.remove(c);
-      c.traverse((o) => { if (o.geometry) o.geometry.dispose(); });
+      // 使い回している形 (影の板) は捨てない。材質は捨てる (絵は texCache が持ち続ける)
+      c.traverse((o) => {
+        if (o.geometry && o.geometry !== blobGeo) o.geometry.dispose();
+        if (o.material) for (const mt of [].concat(o.material)) mt.dispose();
+        if (o.isInstancedMesh) o.dispose();
+      });
     }
     const before = new Set(scene.children);
     buildField();
@@ -574,21 +590,35 @@ const ROYALE_CAM = { h: 21, back: 10, ahead: 5, fov: 52, final: 0.72 };
     return C.playerHeight(p) + 0.6;
   }
 
-  /** 体力の絵 (雪玉 3 つ。残りは白、減った所は暗い穴)。hp ごとに 1 枚 */
+  /**
+   * 体力の絵 (ハート。残りは赤、減った所は暗い穴)。hp ごとに 1 枚。
+   * 前は白い丸で、持っている雪玉 (白い丸) と見分けにくかった
+   */
+  const HEART = { w: 30, h: 32 };
+  function heartPath(g, cx, cy, s) {
+    g.beginPath();
+    g.moveTo(cx, cy + s * 0.9);
+    g.bezierCurveTo(cx - s * 1.5, cy - s * 0.1, cx - s * 0.85, cy - s * 1.15, cx, cy - s * 0.4);
+    g.bezierCurveTo(cx + s * 0.85, cy - s * 1.15, cx + s * 1.5, cy - s * 0.1, cx, cy + s * 0.9);
+    g.closePath();
+  }
   const hpTexCache = {};
   function hpTex(hp) {
     if (hpTexCache[hp]) return hpTexCache[hp];
-    const c = document.createElement('canvas'); c.width = 96; c.height = 32;
+    const N = R.ROYALE.HP;
+    const c = document.createElement('canvas'); c.width = HEART.w * N; c.height = HEART.h;
     const g = c.getContext('2d');
-    for (let i = 0; i < R.ROYALE.HP; i++) {
-      const x = 16 + i * 32, y = 16;
-      g.beginPath(); g.arc(x, y, 12, 0, Math.PI * 2);
-      g.fillStyle = i < hp ? (hp === 1 ? '#ff5a4a' : '#ffffff') : 'rgba(20,30,50,.55)'; g.fill();
-      g.lineWidth = 3; g.strokeStyle = i < hp ? '#1d3a6a' : 'rgba(255,255,255,.6)'; g.stroke();
+    for (let i = 0; i < N; i++) {
+      heartPath(g, HEART.w * (i + 0.5), HEART.h / 2 + 1, 11);
+      g.lineJoin = 'round';
+      g.lineWidth = 5; g.strokeStyle = i < hp ? '#ffffff' : 'rgba(255,255,255,.55)'; g.stroke();
+      g.fillStyle = i < hp ? (hp === 1 ? '#ff2a1a' : '#ff4f7a') : 'rgba(20,30,50,.6)'; g.fill();
     }
     const t = new T.CanvasTexture(c); t.colorSpace = T.SRGBColorSpace;
     return (hpTexCache[hp] = t);
   }
+  // 頭の上に出す大きさ (m)。ハート 1 つ 0.3m
+  const HP_SPR = { w: 0.3 * R.ROYALE.HP, h: 0.32 };
 
   function resetPlayers() {
     for (const v of views.players) {
@@ -600,7 +630,7 @@ const ROYALE_CAM = { h: 21, back: 10, ahead: 5, fov: 52, final: 0.72 };
     views.players = app.match.players.map((p) => { const v = makePlayerMesh(p); v.team = p.team; return v; });
     views.players.forEach(attachSprite);
     // バトルロイヤル: 頭の上に体力 (雪玉 3 つ)
-    if (app.match.mode === 'royale') views.players.forEach((v) => { v.hpSpr = new T.Sprite(new T.SpriteMaterial({ map: hpTex(R.ROYALE.HP), depthTest: false, transparent: true })); v.hpSpr.scale.set(1.05, 0.35, 1); v.hpSpr.renderOrder = 7; scene.add(v.hpSpr); });
+    if (app.match.mode === 'royale') views.players.forEach((v) => { v.hpSpr = new T.Sprite(new T.SpriteMaterial({ map: hpTex(R.ROYALE.HP), depthTest: false, transparent: true })); v.hpSpr.scale.set(HP_SPR.w, HP_SPR.h, 1); v.hpSpr.renderOrder = 7; scene.add(v.hpSpr); });
     for (const [, b] of views.balls) { scene.remove(b.mesh); scene.remove(b.shadow); }
     views.balls.clear();
   }
@@ -1035,6 +1065,8 @@ const ROYALE_CAM = { h: 21, back: 10, ahead: 5, fov: 52, final: 0.72 };
     const api = {
       unlock, measure, music, musicMute, measureMusic,
       musicName: () => mus.name,
+      /** ステージが縮む: 下がっていく警報 2 回 */
+      shrink() { tone(880, 0.22, 0.14, 'square', 440); setTimeout(() => tone(880, 0.3, 0.14, 'square', 392), 240); },
       /** 決戦の始まり: 下から駆け上がる音と、高いシンバル */
       final() {
         [0, 4, 7, 12, 16].forEach((n, i) => setTimeout(() => tone(hz(62 + n), 0.16, 0.16, 'square'), i * 70));
@@ -1111,6 +1143,27 @@ const ROYALE_CAM = { h: 21, back: 10, ahead: 5, fov: 52, final: 0.72 };
    * 0.08 秒で大きく飛び出し、少し縮みながら 0.5 秒で消える。連続ヒットは下に小さく添える
    */
   const HIT_SHAKE = { time: 0.2, amp: 0.22 };   // 揺れ: 0.2 秒、はじめ 0.22m (画面で 8px ほど) から 0 へ
+  /**
+   * 集中線: 画面のまわりから真ん中へ向かう線を、短いあいだ出す (まんがの「ここを見ろ」)。
+   * 絵は CSS の 1 枚 (.focus) で、動かすのは透け具合と大きさ・回りだけ (塗り直さない)。カクカクと 6 段で動かす
+   */
+  const FOCUS = { white: '#ffffff', gold: '#ffe066', red: '#ff5a48', blue: '#9fd4ff' };
+  function focusLines(color, dur, strength) {
+    const el = els.focus;
+    if (!el || !el.animate) return;
+    const col = FOCUS[color] || FOCUS.white;
+    if (app.focusCol !== col) { app.focusCol = col; el.style.setProperty('--fc', col); }
+    const s = strength == null ? 0.85 : strength;
+    if (app.focusAnim) app.focusAnim.cancel();
+    app.focusAnim = el.animate([
+      { opacity: 0, transform: 'scale(1.3) rotate(0deg)' },
+      { opacity: s, transform: 'scale(1) rotate(4deg)', offset: 0.14 },
+      { opacity: s * 0.85, transform: 'scale(1.06) rotate(-3deg)', offset: 0.6 },
+      { opacity: 0, transform: 'scale(1.12) rotate(5deg)' }
+    ], { duration: dur || 450, easing: 'steps(6, end)' });
+    app.focusN = (app.focusN || 0) + 1;
+  }
+
   function hitText(sub, main, dur) {
     dur = dur || 500;
     app.hitTextUntil = performance.now() + dur;
@@ -1195,7 +1248,16 @@ const ROYALE_CAM = { h: 21, back: 10, ahead: 5, fov: 52, final: 0.72 };
           if (m.human != null && m.players[m.human].alive) sound.music('final');
           const names = e.ids.map((id) => (id === mine ? 'あなた' : NAMES[m.players[id].team])).join(' vs ');
           bigText([{ t: 'FINAL', cls: 'l1' }, { t: 'BATTLE!!', cls: 'l1' }, { t: names, cls: 'info' }], 'red', 2400, 'final-text');
-          app.finalFlash = 1;
+          focusLines('red', 2200, 0.9);
+          break;
+        }
+        case 'shrink': {
+          // 時間でステージが縮む: 赤い柵が出て、外にいると中へ押される
+          if (m.final) break;                        // 決戦のお知らせと重ねない
+          sound.shrink();
+          showBanner(`ステージが縮む!<small>赤い柵の中へ (${e.stage}/${e.of})</small>`, 'red', 1.8);
+          focusLines('blue', 900, 0.6);
+          app.shake = Math.max(app.shake, 0.25);
           break;
         }
         case 'throw': {
@@ -1205,10 +1267,11 @@ const ROYALE_CAM = { h: 21, back: 10, ahead: 5, fov: 52, final: 0.72 };
           if (p && Math.hypot(p.x - camLook.x, p.z - camLook.z) < 14) sound.throw();
           break;
         }
-        case 'bigThrow': sound.big(); break;
+        case 'bigThrow': sound.big(); if (e.player === mine) focusLines('gold', 600, 0.8); break;
         case 'splash': {
           // 大玉が落ちた所: 大きな粉雪と、強めの揺れ
           puff(e.x, 0.3, e.z, 40, 2.4);
+          if (e.by === mine) focusLines('gold', 500, 0.7);
           app.hitShake = HIT_SHAKE.time * 1.4; sound.bashi();
           break;
         }
@@ -1225,13 +1288,14 @@ const ROYALE_CAM = { h: 21, back: 10, ahead: 5, fov: 52, final: 0.72 };
           break;
         }
         case 'hurt': {
-          // バトルロイヤル: 体力が減った (1 回目は青い雪、2 回目は赤い雪 = あと 1 回)
-          puff(e.x, e.y, e.z, e.hp <= 1 ? 26 : 20, 1.4, e.hp <= 1 ? 'red' : 'blue');
+          // バトルロイヤル: 体力が減った (青い雪。あと 1 回になったら赤い雪)。大玉は 2 減る
+          puff(e.x, e.y, e.z, (e.hp <= 1 ? 26 : 20) + (e.big ? 14 : 0), 1.4, e.hp <= 1 ? 'red' : 'blue');
           const vq = views.players[e.player];
           if (vq) vq.hurtT = 0.35;
           if (e.player === mine) {
             app.shake = 0.35; sound.hit();
-            showBanner(e.hp <= 1 ? 'あと1回で脱落!<small>体力 1</small>' : `当たった!<small>体力 ${e.hp}</small>`, 'red', 1.1);
+            showBanner(e.hp <= 1 ? 'あと1回で脱落!<small>ハート のこり 1</small>' : `当たった!<small>ハート のこり ${e.hp}</small>`, 'red', 1.1);
+            focusLines('red', 380, 0.55);
           } else if (e.by === mine) {
             app.slowT = 0.12;
             app.hitShake = HIT_SHAKE.time;
@@ -1241,7 +1305,8 @@ const ROYALE_CAM = { h: 21, back: 10, ahead: 5, fov: 52, final: 0.72 };
             app.combo.t = now;
             scenery.cheerT[0] = scenery.cheerT[1] = 1.6;
             sound.bashi(); sound.hit(app.combo.n);
-            hitText(e.hp <= 1 ? 'あと1回!' : '');
+            hitText(e.big ? `大玉! ハート -${e.dmg}` : e.hp <= 1 ? 'あと1回!' : '');
+            focusLines(e.big ? 'gold' : 'white', 450, 0.85);
           } else sound.hit();
           break;
         }
@@ -1261,6 +1326,7 @@ const ROYALE_CAM = { h: 21, back: 10, ahead: 5, fov: 52, final: 0.72 };
               app.combo.n = 0;
               els.banner.hidden = true;
               hitText(`${e.place}位`, 'OUT!!', 1400);
+              focusLines('red', 1300, 0.9);
               app.outAt = performance.now();
               sound.music(null);
             } else if (e.by === mine) {
@@ -1271,6 +1337,7 @@ const ROYALE_CAM = { h: 21, back: 10, ahead: 5, fov: 52, final: 0.72 };
               sound.bashi(); sound.out();
               const left = m.players.filter((q) => q.alive).length;
               hitText(`${NAMES[e.player]}を倒した! ・ のこり${left}人`, 'OUT!!', 900);
+              focusLines('gold', 900, 0.95);
             } else {
               const q = m.players[e.player];
               if (q) popText(`${NAMES[e.player]} OUT`, q.x, 2.6, q.z, 1);
@@ -1302,6 +1369,7 @@ const ROYALE_CAM = { h: 21, back: 10, ahead: 5, fov: 52, final: 0.72 };
             app.combo.t = now;
             sound.bashi(); sound.hit(app.combo.n);
             hitText(app.combo.n >= 2 ? (['', '', 'ダブル!', 'トリプル!'][app.combo.n] || `${app.combo.n}連続!`) : '');
+            focusLines(e.big ? 'gold' : 'white', 450, 0.85);
           } else {
             puff(e.x, e.y, e.z, 16, 1.3);
             sound.hit();
@@ -1317,6 +1385,7 @@ const ROYALE_CAM = { h: 21, back: 10, ahead: 5, fov: 52, final: 0.72 };
           els.banner.hidden = true;
           bigText([{ t: BIG_REASON[e.reason], cls: 'l1' }, { t: who, cls: 'l2' }, { t: `SET ${e.setNo} ・ ${e.points[0]} - ${e.points[1]} pt`, cls: 'info' }],
             e.winner === 0 ? 'blue' : e.winner === 1 ? 'red' : 'gray', (R.SET_OVER - 0.3) * 1000, 'result-text');
+          focusLines(e.winner === 0 ? 'blue' : e.winner === 1 ? 'red' : 'white', 1600, e.winner === 0 ? 0.9 : 0.6);
           app.aim = null; els.throwPad.classList.remove('on');
           break;
         }
@@ -1327,6 +1396,7 @@ const ROYALE_CAM = { h: 21, back: 10, ahead: 5, fov: 52, final: 0.72 };
           const winMe = e.winner === mine;
           bigText([{ t: winMe ? '優勝!' : `${NAMES[e.winner]}の優勝`, cls: 'l1' }, { t: e.by === 'time' ? '時間切れ' : '最後の1人', cls: 'l2' }],
             winMe ? 'blue' : 'gray', (R.SET_OVER - 0.3) * 1000, 'result-text');
+          if (winMe) focusLines('gold', 2200, 0.95);
           app.aim = null; els.throwPad.classList.remove('on');
           break;
         }
@@ -1468,7 +1538,10 @@ const ROYALE_CAM = { h: 21, back: 10, ahead: 5, fov: 52, final: 0.72 };
     }
     const m = app.match, p = me();
     const lockQ = app.lock && app.lock.target != null && m ? m.players[app.lock.target] : null;
-    const wantAim = !!(app.aim && !app.aimCancel && m && m.phase === 'play' && p && p.alive && lockQ && lockQ.alive &&
+    // バトルロイヤルでは構えても寄らない: 21m 上から 4m まで下がって相手の方へ回りこむので、
+    // 見えている相手が 3 人 → 1 人に減り、相手が手前 (南) にいると画面の上下と移動の向きが逆になった
+    const royale = !!(m && m.mode === 'royale');
+    const wantAim = !royale && !!(app.aim && !app.aimCancel && m && m.phase === 'play' && p && p.alive && lockQ && lockQ.alive &&
       (m.aimMode === 'hard' || performance.now() - (app.aim.t0 || 0) > AIM_CAM.holdMs));
     app.aimZoom = lerpN(app.aimZoom || 0, wantAim ? 1 : 0, dt * AIM_CAM.rate);
     if (wantAim) app.aimCamQ = { x: lockQ.x, z: lockQ.z, px: p.x, pz: p.z };
@@ -1484,7 +1557,8 @@ const ROYALE_CAM = { h: 21, back: 10, ahead: 5, fov: 52, final: 0.72 };
     if (hc) {
       hc.t += dt;
       const t = hc.t, T0 = 0.12, T1 = 0.45;
-      const w = (t < T0 ? t / T0 : t < T1 ? 1 : Math.max(0, 1 - (t - T1) / (HIT_CAM.time - T1))) * HIT_CAM.amount;
+      // バトルロイヤルは寄りを浅く (まわりの敵を見失わないように)
+      const w = (t < T0 ? t / T0 : t < T1 ? 1 : Math.max(0, 1 - (t - T1) / (HIT_CAM.time - T1))) * HIT_CAM.amount * (royale ? HIT_CAM.royale : 1);
       let vx = pos.x - hc.x, vz = pos.z - hc.z;
       const vl = Math.hypot(vx, vz) || 1; vx /= vl; vz /= vl;
       pos.lerp(new T.Vector3(hc.x + vx * HIT_CAM.dist, HIT_CAM.up, hc.z + vz * HIT_CAM.dist), w);
@@ -1530,7 +1604,8 @@ const ROYALE_CAM = { h: 21, back: 10, ahead: 5, fov: 52, final: 0.72 };
         return { pos: new T.Vector3(cx, ROYALE_CAM.h * f, cz + back), look: new T.Vector3(cx, 0, cz) };
       }
       const f = 1;
-      const x = p ? clampN(p.x, -12, 12) : 0, z = p ? clampN(p.z, -13, 13) : 0;
+      const lim = Math.max(2, C.ARENA.hw - 3);       // 縮んだステージに合わせて、外を写しすぎない
+      const x = p ? clampN(p.x, -lim, lim) : 0, z = p ? clampN(p.z, -lim - 1, lim + 1) : 0;
       return { pos: new T.Vector3(x, ROYALE_CAM.h * f, z + ROYALE_CAM.back * f), look: new T.Vector3(x, 0, z - ROYALE_CAM.ahead * f) };
     }
     const x = p ? p.x * 0.35 : 0;
@@ -1669,7 +1744,7 @@ const ROYALE_CAM = { h: 21, back: 10, ahead: 5, fov: 52, final: 0.72 };
         const tex = hpTex(Math.max(0, p.hp));
         if (v.hpSpr.material.map !== tex) { v.hpSpr.material.map = tex; v.hpSpr.material.needsUpdate = true; }
         const hurt = v.hurtT > 0 ? (v.hurtT -= dt, 1 + v.hurtT * 1.6) : 1;   // 減った瞬間に少しふくらむ
-        v.hpSpr.scale.set(1.05 * hurt, 0.35 * hurt, 1);
+        v.hpSpr.scale.set(HP_SPR.w * hurt, HP_SPR.h * hurt, 1);
         // 絵の板は見下ろしで縮むぶん縦に伸ばしてあるので、頭の高さもその分だけ上げる
         const stretch = v.spr ? v.spr.mesh.scale.y : 1;
         v.hpSpr.position.set(p.x, headTop(p) * stretch + (p.id === m.human ? 0.85 : 0.4), p.z);
@@ -1679,7 +1754,7 @@ const ROYALE_CAM = { h: 21, back: 10, ahead: 5, fov: 52, final: 0.72 };
       const fov = m.mode === 'royale' ? ROYALE_CAM.fov : CAM.fov;
       if (camera.fov !== fov) { camera.fov = fov; camera.updateProjectionMatrix(); }
       // 決戦: 縮んでいく会場のふちに赤い柵
-      const showZone = m.mode === 'royale' && !!m.final;
+      const showZone = m.mode === 'royale' && C.ARENA.hw < R.ROYALE.HALF - 0.01;   // 縮み始めたら柵を出す
       zone.visible = showZone;
       if (showZone) {
         const hw = C.ARENA.hw;
@@ -2078,6 +2153,7 @@ const ROYALE_CAM = { h: 21, back: 10, ahead: 5, fov: 52, final: 0.72 };
       music: () => sound.musicName(),
       measureMusic: (name, sec) => sound.measureMusic(name, sec || 4),
       zone: () => ({ visible: zone.visible, hw: C.ARENA.hw }),
+      focus: () => ({ n: app.focusN || 0, col: app.focusCol || null, opacity: +getComputedStyle(els.focus).opacity }),
       camPos: () => camera.position.toArray().map((v) => +v.toFixed(2)),
       fov: () => camera.fov,
       walls: () => C.SHELTERS.length,
@@ -2117,7 +2193,8 @@ const ROYALE_CAM = { h: 21, back: 10, ahead: 5, fov: 52, final: 0.72 };
         return { top: Math.hypot(b.x - a.x, b.y - a.y), side: Math.hypot(c.x - a.x, c.y - a.y), opacity: sm.material.opacity, visible: sm.visible, depthTest: sm.material.depthTest };
       },
       frames: () => app.frames,
-      info: () => ({ calls: renderer.info.render.calls, tris: renderer.info.render.triangles, pr: renderer.getPixelRatio() })
+      info: () => ({ calls: renderer.info.render.calls, tris: renderer.info.render.triangles, pr: renderer.getPixelRatio() }),
+      mem: () => ({ textures: renderer.info.memory.textures, geometries: renderer.info.memory.geometries })
     };
   }
 

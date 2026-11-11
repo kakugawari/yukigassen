@@ -538,9 +538,10 @@ body:has(#vTitle:not([hidden])) .controls { visibility: hidden; }
 .r-dots i.out { background: #c6ccd6 !important; }
 .r-right { display: grid; justify-items: end; gap: 4px; }
 .r-hp { display: flex; gap: 3px; }
-.r-hp i { width: 14px; height: 14px; border-radius: 50%; display: block; background: #fff; border: 2px solid #3f86ff; box-shadow: inset 0 -2px 0 rgba(80, 130, 200, .35); }
-.r-hp i.lost { background: #d7dde6; border-color: #b8c1ce; box-shadow: none; }
-.r-hp.danger i:not(.lost) { border-color: #e8322a; background: #ffd9d4; animation: hpBlink .5s steps(2) infinite; }
+/* 体力はハート (持っている雪玉の白い丸と見分けるため) */
+.r-hp i { width: 16px; height: 15px; display: block; background: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 30'%3E%3Cpath d='M16 28C4 19 1 13 1 8.5 1 4 4.5 1 8.5 1 12 1 14.5 3 16 5.5 17.5 3 20 1 23.5 1 27.5 1 31 4 31 8.5 31 13 28 19 16 28Z' fill='%23ff4f7a' stroke='%23b3123f' stroke-width='2'/%3E%3C/svg%3E") center / contain no-repeat; }
+.r-hp i.lost { background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 30'%3E%3Cpath d='M16 28C4 19 1 13 1 8.5 1 4 4.5 1 8.5 1 12 1 14.5 3 16 5.5 17.5 3 20 1 23.5 1 27.5 1 31 4 31 8.5 31 13 28 19 16 28Z' fill='%23d7dde6' stroke='%23b8c1ce' stroke-width='2'/%3E%3C/svg%3E"); }
+.r-hp.danger i:not(.lost) { animation: hpBlink .5s steps(2) infinite; }
 @keyframes hpBlink { 50% { opacity: .35; } }
 .r-kills { font-size: 10px; font-weight: 800; color: #5b6b85; font-variant-numeric: tabular-nums; }
 
@@ -565,3 +566,15 @@ body:has(#vTitle:not([hidden])) .controls { visibility: hidden; }
 .big-text.final-text { top: 38%; --c: #ff3b1f; }
 .big-text.final-text .l1 { font-size: 74px; line-height: .95; }
 .big-text.final-text .l1 + .l1 { color: #ffd34d; }
+
+/* 集中線: 2 つの周期の違う線を重ねて、ばらついた線に見せる。真ん中は抜く。動かすのは透け具合と transform だけ */
+.focus {
+  --fc: #fff;
+  position: absolute; left: 50%; top: 46%; width: 1120px; height: 1120px; margin: -560px 0 0 -560px;   /* 画面の対角 1026 を覆う最小限 (大きいほど重ねるのが重い) */
+  pointer-events: none; opacity: 0; will-change: transform, opacity; contain: strict;
+  background:
+    repeating-conic-gradient(from 3deg, var(--fc) 0 0.9deg, transparent 0.9deg 7deg),
+    repeating-conic-gradient(from 0deg, transparent 0 4.2deg, var(--fc) 4.2deg 4.7deg, transparent 4.7deg 11deg);
+  -webkit-mask: radial-gradient(circle, transparent 0 21%, rgba(0, 0, 0, .55) 32%, #000 46%);
+  mask: radial-gradient(circle, transparent 0 21%, rgba(0, 0, 0, .55) 32%, #000 46%);
+}

@@ -7,7 +7,7 @@
   const C = window.Core;
   const R = C.R;
   const T = window.THREE;
-  const VERSION = 'v22';
+  const VERSION = 'v23';
   const AI_SKILL = 0.5;      // 相手の強さ (前の「ふつう」)。強さのえらびはやめ、投げ方をえらぶ
   const AUTO_CROUCH = 0.2;
   const CANCEL = { out: 40, back: 18 };   // 投げるボタン: 40px 以上引っぱってから 18px 以内へ戻して離すと取り消し   // 止まってからしゃがむまで (秒)
@@ -2018,8 +2018,24 @@ const ROYALE_CAM = { h: 21, back: 10, ahead: 5, fov: 52, final: 0.72 };
       if (app.bannerT <= 0) els.banner.hidden = true;
     }
     updateHud();
+    updateBarColor();
     render(app.paused ? 0 : dt);
     updateEdgeMarks();
+  }
+
+  /**
+   * 時計や電池の帯の色 (theme-color) を、いま出ている画面に合わせる。
+   * 帯の下まで描けない開き方 (前に追加したホーム画面のアイコン・Safari) では、帯がこの色の板になる。
+   * タイトルと結果は暗い幕なので暗く、試合中は空の色
+   */
+  const BAR = { dark: '#384660', game: '#cfe3f5' };   // dark はタイトルの幕のいちばん上の色 (実機の写真から読んだ)
+  const themeMeta = document.querySelector('meta[name="theme-color"]');
+  function updateBarColor() {
+    const col = (!els.vTitle.hidden || !els.vResult.hidden) ? BAR.dark : BAR.game;
+    if (app.barCol === col) return;
+    app.barCol = col;
+    if (themeMeta) themeMeta.setAttribute('content', col);
+    document.documentElement.style.background = col;      // 帯の色に html の背景を使う版もある
   }
 
   function resize() {

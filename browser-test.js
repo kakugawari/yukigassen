@@ -141,6 +141,15 @@ async function run() {
     });
     ok(icon && /\.png$/.test(icon.href) && icon.w === 180 && icon.h === 180, `ホーム画面のアイコンは PNG 180x180 で読める (${JSON.stringify(icon)})`);
     ok(fit.hudHidden, 'タイトルの間は試合の表示と操作が隠れている');
+    // ホーム画面から開いたとき、時計や電池の帯の下までゲームを描く指定がある (無いと、帯が空色の板になった)
+    const bar = await phone.evaluate(() => ({
+      style: (document.querySelector('meta[name="apple-mobile-web-app-status-bar-style"]') || {}).content,
+      fit: /viewport-fit=cover/.test(document.querySelector('meta[name="viewport"]').content),
+      theme: document.querySelector('meta[name="theme-color"]').content,
+      top: document.getElementById('game').getBoundingClientRect().top
+    }));
+    ok(bar.style === 'black-translucent' && bar.fit && bar.top === 0, `帯の下までゲームを描く指定 (${JSON.stringify(bar)})`);
+    ok(bar.theme === '#384660', `タイトルの間、帯の色は暗い幕に合わせる (${bar.theme})`);
 
     // ------------------------------------------------ 試合を始める
     section('試合');
@@ -156,6 +165,8 @@ async function run() {
       hud: getComputedStyle(document.querySelector('.hud')).visibility
     }));
     ok(started.title && started.human != null && started.hud === 'visible', '試合開始でタイトルが消え、自分の選手が決まる');
+    await phone.waitForFunction(() => document.querySelector('meta[name="theme-color"]').content === '#cfe3f5', null, { timeout: 5000 }).catch(() => {});
+    ok(await phone.evaluate(() => document.querySelector('meta[name="theme-color"]').content) === '#cfe3f5', '試合中、帯の色は空の色に戻る');
     await phone.waitForFunction(() => window.__app.match().phase === 'play', null, { timeout: 15000 });
     ok(true, 'カウントダウンのあとプレーが始まる');
 

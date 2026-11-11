@@ -815,12 +815,13 @@ function throwAt(m, a, b) {
   return ev;
 }
 
-test('バトルロイヤル: 8 人がばらばらのチーム・体力 3・広い正方形。チーム戦に戻すと壁と広さも戻る', () => {
+test('バトルロイヤル: 8 人がばらばらのチーム・体力 5・広い正方形。チーム戦に戻すと壁と広さも戻る', () => {
   const m = C.createMatch({ mode: 'royale', seed: 1, human: 0 });
   assert.strictEqual(m.mode, 'royale');
   assert.strictEqual(m.players.length, 8);
   assert.strictEqual(new Set(m.players.map((p) => p.team)).size, 8);
-  assert.ok(m.players.every((p) => p.hp === 3 && Math.abs(p.x) < R.ROYALE.HALF && Math.abs(p.z) < R.ROYALE.HALF));
+  assert.strictEqual(R.ROYALE.HP, 5);
+  assert.ok(m.players.every((p) => p.hp === R.ROYALE.HP && Math.abs(p.x) < R.ROYALE.HALF && Math.abs(p.z) < R.ROYALE.HALF));
   assert.strictEqual(m.setTime, 180);
   assert.strictEqual(C.ARENA.hw, R.ROYALE.HALF);
   const royaleWalls = C.SHELTERS.length;
@@ -836,30 +837,29 @@ test('バトルロイヤル: 8 人がばらばらのチーム・体力 3・広�
   assert.strictEqual(C.SHELTERS.length, royaleWalls);
 });
 
-test('バトルロイヤル: 3 回当たると脱落。当たった直後 1 秒は当たらない。倒した数と順位がつく', () => {
+test('バトルロイヤル: 体力ぶん (5 回) 当たると脱落。当たった直後 1 秒は当たらない。倒した数と順位がつく', () => {
+  const HP = R.ROYALE.HP;
   const m = royale([0, 1]);
   const A = m.players[0], B = m.players[1];
   A.x = -3; A.z = 3; B.x = -3; B.z = 7;
   let ev = throwAt(m, 0, 1);
   const hurt = ev.find((e) => e.type === 'hurt');
   assert.ok(hurt, '1 回目は体力が減るだけ: ' + ev.map((e) => e.type).join(','));
-  assert.strictEqual(B.hp, 2);
+  assert.strictEqual(B.hp, HP - 1);
   assert.ok(B.alive && B.inv > 0);
   // 無敵の間に当たった玉ははじかれる (体力は減らない)
   B.inv = 1;
   ev = throwAt(m, 0, 1);
   assert.ok(ev.some((e) => e.type === 'block'));
-  assert.strictEqual(B.hp, 2);
-  B.inv = 0;
-  throwAt(m, 0, 1);
-  assert.strictEqual(B.hp, 1);
+  assert.strictEqual(B.hp, HP - 1);
+  for (let k = HP - 2; k >= 1; k--) { B.inv = 0; throwAt(m, 0, 1); assert.strictEqual(B.hp, k); assert.ok(B.alive); }
   B.inv = 0;
   ev = throwAt(m, 0, 1);
   const out = ev.find((e) => e.type === 'hit');
-  assert.ok(out && out.royale && out.by === 0, '3 回目で脱落');
+  assert.ok(out && out.royale && out.by === 0, '体力ぶん当たって脱落');
   assert.strictEqual(B.alive, false);
   assert.strictEqual(A.kills, 1);
-  assert.strictEqual(A.hits, 3);
+  assert.strictEqual(A.hits, HP);
   // 残り 1 人で決着: 1 位は A、2 位は最後に脱落した B
   const end = ev.concat(C.drainEvents(m)).find((e) => e.type === 'royaleEnd');
   assert.ok(end, '残り 1 人で決着');
@@ -1013,4 +1013,61 @@ test('バトルロイヤル: かんたんの玉の曲がりは、チーム戦よ
   assert.ok(r > 0.02 && r <= R.ROYALE.HOMING_TURN * 0.3 + 0.01, `バトルロイヤル: 0.3 秒で ${r.toFixed(3)} rad (上限 ${(R.ROYALE.HOMING_TURN * 0.3).toFixed(2)})`);
   assert.ok(t > r * 1.3, `チーム戦の方がよく曲がる (${t.toFixed(3)} > ${r.toFixed(3)})`);
   assert.strictEqual(R.HOMING_TURN, 2.0);
+});
+
+test('バトルロイヤル: 必殺の大玉は体力を 2 減らす (じかに当たっても、まわりに弾けても)。残り 1 なら脱落', () => {
+  const m = royale([0, 1, 2], { human: 0, aimMode: 'easy' });
+  const A = m.players[0], B = m.players[1], D = m.players[2];
+  A.x = -3; A.z = 3; B.x = -3; B.z = 7; D.x = -2.2; D.z = 7.6;       // D は B のすぐそば (1.6m 以内)
+  const big = () => {
+    m.sp[0] = 1; A.balls = 3; A.cd = 0; A.standT = 0; B.inv = D.inv = 0;
+    B.balls = D.balls = 0;      // 相手 (AI) が先に投げ合うと、当たった直後の無敵で大玉がはじかれる
+    const ev = [];
+    C.step(m, 1 / 60, { throwAt: { x: B.x, z: B.z, target: 1 } });
+    for (let i = 0; i < 200 && (m.balls.length || i < 2); i++) {
+      ev.push(...C.drainEvents(m));
+      B.balls = D.balls = A.balls = 0; C.step(m, 1 / 60, {});
+      A.x = -3; A.z = 3; if (B.alive) { B.x = -3; B.z = 7; } if (D.alive) { D.x = -2.2; D.z = 7.6; }
+    }
+    ev.push(...C.drainEvents(m));
+    return ev;
+  };
+  let ev = big();
+  assert.ok(ev.some((e) => e.type === 'bigThrow'), '大玉を投げた: ' + ev.map((e) => e.type).join(','));
+  assert.strictEqual(B.hp, R.ROYALE.HP - 2, 'じかに当たった相手は 2 減る');
+  assert.strictEqual(D.hp, R.ROYALE.HP - 2, 'まわりの相手も 2 減る');
+  const h = ev.find((e) => e.type === 'hurt' && e.player === 1);
+  assert.ok(h && h.dmg === 2 && h.big);
+  assert.ok(!ev.some((e) => e.type === 'block' && e.player === 1), 'じかに当たった相手に、はじいた印を重ねて出さない');
+  // ふつうの玉は 1
+  m.sp[0] = 0; B.inv = 0;
+  throwAt(m, 0, 1);
+  assert.strictEqual(B.hp, R.ROYALE.HP - 3);
+  // 残り 1 の相手に大玉: 0 で止まって脱落 (マイナスにならない)
+  B.hp = 1; D.hp = 5;
+  ev = big();
+  assert.strictEqual(B.hp, 0);
+  assert.strictEqual(B.alive, false);
+});
+
+test('バトルロイヤル: ステージは時間で 3 回縮む (残り 150・105・60 秒で 12・10・8m)。縮む間も選手は中にいる', () => {
+  const m = royale([0, 3, 5], { human: null });
+  for (const id of [0, 3, 5]) m.players[id].inv = 9999;
+  m.players[0].x = 14; m.players[0].z = 14; m.players[3].x = -14; m.players[3].z = 0; m.players[5].x = 0; m.players[5].z = -14;
+  const seen = [];
+  let out = 0, inWall = 0;
+  for (let i = 0; i < 60 * 130 && m.phase === 'play'; i++) {
+    for (const p of m.players) { p.balls = 0; p.makeT = 0; }
+    C.step(m, 1 / 60, {});
+    for (const e of C.drainEvents(m)) if (e.type === 'shrink') seen.push([Math.round(m.time), e.half, e.stage]);
+    for (const p of m.players) {
+      if (!p.alive) continue;
+      if (Math.abs(p.x) > C.ARENA.hw + 0.01 || Math.abs(p.z) > C.ARENA.hw + 0.01) out++;
+      if (C.SHELTERS.some((w) => Math.abs(p.x - w.x) < w.w / 2 - 0.05 && Math.abs(p.z - w.z) < w.d / 2 - 0.05)) inWall++;
+    }
+  }
+  assert.deepStrictEqual(seen, [[150, 12, 1], [105, 10, 2], [60, 8, 3]]);
+  assert.ok(Math.abs(C.ARENA.hw - 8) < 1e-6, `最後は 16m 四方 (${C.ARENA.hw})`);
+  assert.strictEqual(out, 0, '縮むふちの外に残った選手');
+  assert.strictEqual(inWall, 0, '壁の中に入った選手');
 });

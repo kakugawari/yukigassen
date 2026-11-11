@@ -838,9 +838,12 @@ async function run() {
       ok(band + 59 <= 120, `帯の下端 ${Math.round(band)} (安全域を足して ${Math.round(band + 59)}) はチーム戦と同じ高さ`);
       await rp.waitForTimeout(600);
       const hs = await rp.evaluate(() => [1, 2, 3, 4, 5, 6, 7].map((i) => window.__app.hpSprite(i)));
-      ok(hs.every((h) => h && h.visible && h.hp === 3 && h.y > 1.5), `相手の頭の上に体力が出る (${JSON.stringify(hs[0])})`);
+      ok(hs.every((h) => h && h.visible && h.hp === 5 && h.y > 1.5), `相手の頭の上に体力が出る (${JSON.stringify(hs[0])})`);
       const hud0 = await rp.evaluate(() => ({ alive: document.getElementById('rAlive').textContent, dots: document.querySelectorAll('#rDots i').length, hp: document.querySelectorAll('#rHp i:not(.lost)').length }));
-      ok(hud0.alive === '8' && hud0.dots === 8 && hud0.hp === 3, `帯に のこり 8 人・体力 3 (${JSON.stringify(hud0)})`);
+      ok(hud0.alive === '8' && hud0.dots === 8 && hud0.hp === 5, `帯に のこり 8 人・ハート 5 つ (${JSON.stringify(hud0)})`);
+      // 体力はハートの絵 (雪玉の白い丸と見分ける)。丸い縁取りではない
+      const heart = await rp.evaluate(() => { const s = getComputedStyle(document.querySelector('#rHp i')); return { bg: s.backgroundImage.slice(0, 30), radius: s.borderRadius }; });
+      ok(/svg/.test(heart.bg) && heart.radius === '0px', `帯の体力はハートの絵 (${JSON.stringify(heart)})`);
       const cam0 = await rp.evaluate(() => ({ fov: window.__app.fov(), y: window.__app.camPos()[1], music: window.__app.music() }));
       ok(cam0.fov === 52 && cam0.y > 20, `カメラはいちばん初めの高い位置 (画角 ${cam0.fov}・高さ ${cam0.y})`);
       ok(cam0.music === 'royale', `スタートでバトルロイヤルの曲が鳴る (${cam0.music})`);
@@ -868,11 +871,28 @@ async function run() {
       ok((await rp.evaluate(() => window.__app.hpSprite(4).hp)) === 1, '相手の体力が減ると頭の上の体力も減る');
       // 自分が当てた (脱落ではない): HIT!!
       await rp.evaluate(() => { const m = window.__app.match(); const q = m.players[4]; m.events.push({ type: 'hurt', player: 4, hp: 1, by: 0, x: q.x, y: 1, z: q.z }); });
+      const fc0 = await rp.evaluate(() => window.__app.focus().n);
       await rp.waitForTimeout(120);
       ok(await rp.evaluate(() => [...document.querySelectorAll('.big-text')].some((e) => /HIT!!/.test(e.textContent))), '自分が当てると HIT!!');
+      // 集中線: 当てた瞬間に出て (濃くなる)、すぐ消える
+      await rp.evaluate(() => { const m = window.__app.match(); const q = m.players[4]; m.events.push({ type: 'hurt', player: 4, hp: 1, dmg: 2, big: true, by: 0, x: q.x, y: 1, z: q.z }); });
+      const fl = await rp.evaluate(() => new Promise((res) => {
+        let peak = 0; const t0 = performance.now();
+        const iv = setInterval(() => { peak = Math.max(peak, window.__app.focus().opacity); if (performance.now() - t0 > 1200) { clearInterval(iv); res({ peak, end: window.__app.focus().opacity, n: window.__app.focus().n, col: window.__app.focus().col, text: null }); } }, 25);
+      }));
+      ok(fl.n > fc0 && fl.peak > 0.5 && fl.end === 0, `当てると集中線が出て、消える (いちばん濃い所 ${fl.peak.toFixed(2)}・終わり ${fl.end})`);
+      ok(fl.col === '#ffe066', `大玉を当てたときの集中線は金色 (${fl.col})`);
+      const fpe = await rp.evaluate(() => getComputedStyle(document.getElementById('focus')).pointerEvents);
+      ok(fpe === 'none', '集中線は指の操作をふさがない');
       await rp.waitForTimeout(700);
+      // 時間でステージが縮む: お知らせが出て、赤い柵が出る (決戦を待たない)
+      await rp.waitForTimeout(700);
+      await rp.evaluate(() => { window.__app.match().time = 150.05; });
+      await rp.waitForFunction(() => window.__app.zone().hw < 14.9, null, { timeout: 40000 });
+      const sh = await rp.evaluate(() => ({ zone: window.__app.zone(), banner: document.getElementById('banner').textContent, hidden: document.getElementById('banner').hidden, final: !!window.__app.match().final }));
+      ok(sh.zone.visible && !sh.final && !sh.hidden && /ステージが縮む/.test(sh.banner) && /1\/3/.test(sh.banner), `残り 2:30 でステージが縮み始め、お知らせと柵が出る (${sh.banner}・${sh.zone.hw.toFixed(1)}m)`);
       // 残り 2 人で決戦: FINAL BATTLE!!・会場が縮んで柵が出る・曲が替わる・カメラが寄って 2 人とも画面に入る
-      await rp.evaluate(() => { const m = window.__app.match(); m.players[0].hp = 3; m.players[0].inv = 99; m.players[4].hp = 3; for (const i of [1, 2, 3, 5, 6, 7]) { if (!m.players[i].alive) continue; m.players[i].alive = false; m.players[i].hp = 0; m.out.push(i); } });
+      await rp.evaluate(() => { const m = window.__app.match(); m.players[0].hp = 5; m.players[0].inv = 99; m.players[4].hp = 5; for (const i of [1, 2, 3, 5, 6, 7]) { if (!m.players[i].alive) continue; m.players[i].alive = false; m.players[i].hp = 0; m.out.push(i); } });
       await rp.waitForFunction(() => window.__app.match().final, null, { timeout: 10000 });
       await rp.waitForTimeout(150);
       const fb = await rp.evaluate(() => ({ text: [...document.querySelectorAll('.big-text')].some((e) => /FINAL/.test(e.textContent) && /BATTLE!!/.test(e.textContent)), label: document.getElementById('rLabel').textContent, music: window.__app.music(), time: window.__app.match().time }));
